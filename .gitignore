@@ -1,0 +1,85 @@
+# Environment variables
+.env
+.env.local
+.env*.local
+*.env
+Frontend/.env.local
+Frontend/.env
+
+# Uploaded files
+/uploads
+my.txt
+
+# Node.js / Frontend
+node_modules/
+Frontend/node_modules/
+Frontend/.next/
+Frontend/out/
+Frontend/build/
+Frontend/.turbo/
+.npmrc
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Virtual environment directories
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+*.bak
+
+# Compiled files
+*.o
+*.so
+*.out
+*.a
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+
+# Test results
+.junit/
+test-results/
+
+# Build directories
+build/
+dist/
+*.egg-info/
+
+# Next.js specific
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Optional: Large model files (uncomment if you don't want to push weights)
+# weights/*.pt
+# weights/*.pth
