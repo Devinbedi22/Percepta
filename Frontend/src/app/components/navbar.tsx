@@ -1,12 +1,36 @@
 "use client"
 
 import Link from "next/link"
-import { useState } from "react"
-import { Menu } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Menu, LogOut } from "lucide-react"
+import { useRouter } from "next/navigation"
 import type React from "react"
 
 export function Navbar() {
   const [isOpen, setIsOpen] = useState(false)
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [userEmail, setUserEmail] = useState("")
+  const router = useRouter()
+
+  useEffect(() => {
+    // Check if user is logged in
+    const token = localStorage.getItem("token")
+    const user = localStorage.getItem("user")
+    
+    if (token && user) {
+      setIsLoggedIn(true)
+      const userData = JSON.parse(user)
+      setUserEmail(userData.email)
+    }
+  }, [])
+
+  const handleLogout = () => {
+    localStorage.removeItem("token")
+    localStorage.removeItem("user")
+    setIsLoggedIn(false)
+    setUserEmail("")
+    router.push("/login")
+  }
 
   return (
     <nav className="bg-white shadow-lg">
@@ -20,13 +44,24 @@ export function Navbar() {
           <div className="hidden sm:ml-6 sm:flex sm:space-x-20">
             <NavLink href="/">Home</NavLink>
             <NavLink href="/about">About</NavLink>
-            {/* <NavLink href="/services">Services</NavLink> */}
             <NavLink href="/blog">Blog</NavLink>
           </div>
-          <div className="hidden sm:ml-6 sm:flex sm:items-center">
-            <CustomButton>
-              <Link href="/login">Login</Link>
-            </CustomButton>
+          <div className="hidden sm:ml-6 sm:flex sm:items-center sm:space-x-4">
+            {isLoggedIn ? (
+              <>
+                <span className="text-sm text-gray-700">
+                  {userEmail}
+                </span>
+                <CustomButton variant="ghost" onClick={handleLogout}>
+                  <LogOut className="h-4 w-4 mr-2 inline" />
+                  Logout
+                </CustomButton>
+              </>
+            ) : (
+              <CustomButton>
+                <Link href="/login">Login</Link>
+              </CustomButton>
+            )}
           </div>
           <div className="-mr-2 flex items-center sm:hidden">
             <CustomButton variant="ghost" onClick={() => setIsOpen(!isOpen)}>
@@ -41,12 +76,25 @@ export function Navbar() {
           <div className="pt-2 pb-3 space-y-1">
             <MobileNavLink href="/">Home</MobileNavLink>
             <MobileNavLink href="/about">About</MobileNavLink>
-            {/* <MobileNavLink href="/services">Services</MobileNavLink> */}
             <MobileNavLink href="/blog">Blog</MobileNavLink>
           </div>
           <div className="pt-4 pb-3 border-t border-gray-200">
             <div className="mt-3 space-y-1">
-              <MobileNavLink href="/login">Login</MobileNavLink>
+              {isLoggedIn ? (
+                <>
+                  <div className="px-4 py-2 text-sm text-gray-700">
+                    {userEmail}
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="block w-full text-left pl-3 pr-4 py-2 border-l-4 border-transparent text-base font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 hover:border-gray-300"
+                  >
+                    Logout
+                  </button>
+                </>
+              ) : (
+                <MobileNavLink href="/login">Login</MobileNavLink>
+              )}
             </div>
           </div>
         </div>

@@ -9,3 +9,5 @@ pillow
 requests
 python-dotenv
 groq
+bcrypt
+pyjwt
