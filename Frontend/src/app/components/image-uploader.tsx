@@ -87,56 +87,56 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
     }
   }
 
-  const handleSubmit = async () => {
-    if (image && age && gender && API_URL) {
-      setIsLoading(true)
-      const formData = new FormData()
-
-      if (image.startsWith("data:image")) {
-        const byteCharacters = atob(image.split(",")[1])
-        const byteArrays = []
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteArrays.push(byteCharacters.charCodeAt(i))
-        }
-        const byteArray = new Uint8Array(byteArrays)
-        const blob = new Blob([byteArray], { type: "image/jpeg" })
-
-        formData.append("image", blob, "captured.jpg")
-      } else {
-        formData.append("image", image)
-      }
-
-      formData.append("age", age.toString())
-      formData.append("gender", gender)
-
-      try {
-        const response = await fetch(`${API_URL}/upload`, {
-          method: "POST",
-          body: formData,
-        })
-
-        if (!response.ok) {
-          throw new Error("Failed to upload data")
-        }
-
-        const result = await response.json()
-        console.log("Server Response:", result)
-
-        const analysisResults = {
-          ...result,
-          imageUrl: image,
-        }
-
-        setAnalysisResult(analysisResults)
-        onSubmit(analysisResults)
-      } catch (error) {
-        console.error("Error uploading data:", error)
-        alert("AI server error. Please try again.")
-      } finally {
-        setIsLoading(false)
-      }
-    }
+   const handleSubmit = async () => {
+  if (!image || !age || !gender || !API_URL) {
+    alert("Missing required data")
+    return
   }
+
+  setIsLoading(true)
+  const formData = new FormData()
+
+  try {
+    // ✅ Convert base64 → Blob
+    const byteCharacters = atob(image.split(",")[1])
+    const byteNumbers = new Array(byteCharacters.length)
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i)
+    }
+    const byteArray = new Uint8Array(byteNumbers)
+    const blob = new Blob([byteArray], { type: "image/jpeg" })
+
+    // ✅ MUST MATCH Flask: request.files["file"]
+    formData.append("file", blob, "image.jpg")
+    formData.append("age", age)
+    formData.append("gender", gender)
+
+    const response = await fetch(`${API_URL}/upload`, {
+      method: "POST",
+      body: formData,
+    })
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`)
+    }
+
+    const result = await response.json()
+
+    const analysisResults = {
+      ...result,
+      imageUrl: image,
+    }
+
+    setAnalysisResult(analysisResults)
+    onSubmit(analysisResults)
+  } catch (error) {
+    console.error("Error uploading data:", error)
+    alert("AI server error. Please try again.")
+  } finally {
+    setIsLoading(false)
+  }
+}
+
 
   return (
     <motion.div
