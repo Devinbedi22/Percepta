@@ -180,8 +180,7 @@ def login():
 
 # ---------------- UPLOAD + ANALYZE ----------------
 @app.route("/upload", methods=["POST"])
-@token_required
-def upload(email):
+def upload():
     image = request.files.get("image")
     image_url = request.form.get("imageURL")
     age = request.form.get("age")
@@ -221,7 +220,7 @@ def upload(email):
     return jsonify({
         "predicted_problems": predicted,
         "recommendations": recommendations,
-        "user": email
+
     })
 
 # ---------------- RENDER ENTRY POINT (FIXED) ----------------
