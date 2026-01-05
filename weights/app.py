@@ -12,219 +12,202 @@ import jwt
 from datetime import datetime, timedelta
 from functools import wraps
 
-# Load environment variables
+# -------------------------------------------------
+# ENV
+# -------------------------------------------------
 load_dotenv()
 
 app = Flask(__name__)
 
-# ---------------- CORS CONFIG (FIXED) ----------------
 CORS(
     app,
     origins=[
         "http://localhost:3000",
-        "https://percepta-livid.vercel.app"  # ✅ YOUR ACTUAL VERCEL URL
+        "https://percepta-livid.vercel.app"
     ],
     supports_credentials=True,
     allow_headers=["Content-Type", "Authorization"]
 )
 
-# ---------------- JWT CONFIG ----------------
-JWT_SECRET = os.environ.get(
-    "JWT_SECRET",
-    "kN8vQ2xR9mT5wL3pY7aB4jC6nF0hD8eG1sK4uM7iO2qZ5tV3wX9rA6bE8cH1fJ4g"
-)
+# -------------------------------------------------
+# JWT
+# -------------------------------------------------
+JWT_SECRET = os.environ.get("JWT_SECRET")
 JWT_ALGORITHM = "HS256"
 
-# ---------------- GROQ CLIENT ----------------
-client = Groq(
-    api_key=os.environ.get("GROQ_API_KEY"),
-)
+# -------------------------------------------------
+# GROQ
+# -------------------------------------------------
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-# ---------------- LOAD YOLO MODEL (FIXED PATH) ----------------
-MODEL_PATH = os.path.join("weights", "best.pt")
+# -------------------------------------------------
+# YOLO MODEL (🔥 FIXED PATH)
+# -------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
+
+print("Looking for YOLO model at:", MODEL_PATH)
 
 try:
     model = YOLO(MODEL_PATH)
-    print("YOLO model loaded successfully")
+    print("✅ YOLO model loaded successfully")
 except Exception as e:
-    print(f"Error loading YOLO model: {e}")
+    print("❌ YOLO model failed to load:", e)
     model = None
 
-UPLOAD_FOLDER = "uploads"
+# -------------------------------------------------
+# UPLOADS
+# -------------------------------------------------
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# ---------------- TEMP USER STORE ----------------
+# -------------------------------------------------
+# TEMP USER STORE (DEV)
+# -------------------------------------------------
 users_db = {}
 
-# ---------------- CLASS NAMES ----------------
+# -------------------------------------------------
+# CLASS NAMES
+# -------------------------------------------------
 class_names = {
-    0: '3',
-    1: 'Dark Circle',
-    2: 'Dark circle',
-    3: 'Eyebag',
-    4: 'acne scar',
-    5: 'blackhead',
-    6: 'blackheads',
-    7: 'dark spot',
-    8: 'darkspot',
-    9: 'freckle',
-    10: 'melasma',
-    11: 'nodules',
-    12: 'papules',
-    13: 'pustules',
-    14: 'skinredness',
-    15: 'vascular',
-    16: 'whitehead',
-    17: 'whiteheads',
-    18: 'wrinkle'
+    0: 'Dark Circle',
+    1: 'Eyebag',
+    2: 'acne scar',
+    3: 'blackhead',
+    4: 'dark spot',
+    5: 'freckle',
+    6: 'melasma',
+    7: 'nodules',
+    8: 'papules',
+    9: 'pustules',
+    10: 'skin redness',
+    11: 'vascular',
+    12: 'whitehead',
+    13: 'wrinkle'
 }
 
-# ---------------- AUTH HELPERS ----------------
+# -------------------------------------------------
+# AUTH HELPERS
+# -------------------------------------------------
 def hash_password(password):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 def verify_password(password, hashed):
-    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+    return bcrypt.checkpw(password.encode(), hashed.encode())
 
 def create_token(email):
     payload = {
-        'email': email,
-        'exp': datetime.utcnow() + timedelta(days=7),
-        'iat': datetime.utcnow()
+        "email": email,
+        "exp": datetime.utcnow() + timedelta(days=7)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-def verify_token(token):
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload['email']
-    except Exception:
-        return None
-
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get('Authorization')
-
-        if not token:
-            return jsonify({'error': 'Token missing'}), 401
-
-        if token.startswith("Bearer "):
-            token = token[7:]
-
-        email = verify_token(token)
-        if not email:
-            return jsonify({'error': 'Invalid or expired token'}), 401
-
-        return f(email, *args, **kwargs)
-    return decorated
-
-# ---------------- GROQ HELPER ----------------
+# -------------------------------------------------
+# GROQ HELPER
+# -------------------------------------------------
 def send_to_groq(prompt):
     try:
         completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "system", "content": "You are a skincare AI expert."},
                 {"role": "user", "content": prompt}
-            ],
-            model="llama-3.3-70b-versatile"
+            ]
         )
         return completion.choices[0].message.content
     except Exception as e:
-        print("GROQ error:", e)
-        return None
+        print("❌ GROQ ERROR:", e)
+        return "Unable to generate recommendations."
 
-# ---------------- HEALTH ----------------
+# -------------------------------------------------
+# HEALTH CHECK
+# -------------------------------------------------
 @app.route("/")
 def health():
-    return jsonify({
-        "status": "Backend running",
-        "message": "Percepta-AI API is active"
-    })
+    return jsonify({"status": "ok"})
 
-# ---------------- SIGNUP ----------------
+# -------------------------------------------------
+# AUTH
+# -------------------------------------------------
 @app.route("/api/signup", methods=["POST"])
 def signup():
-    data = request.get_json()
+    data = request.json
     email = data.get("email")
     password = data.get("password")
 
-    if not email or not password:
-        return jsonify({"message": "Email and password required"}), 400
-
     if email in users_db:
-        return jsonify({"message": "User already exists"}), 409
+        return jsonify({"error": "User exists"}), 409
 
     users_db[email] = {
-        "email": email,
-        "password": hash_password(password),
-        "created_at": datetime.utcnow().isoformat()
+        "password": hash_password(password)
     }
 
-    token = create_token(email)
-    return jsonify({"message": "Signup successful", "token": token})
+    return jsonify({"token": create_token(email)})
 
-# ---------------- LOGIN ----------------
 @app.route("/api/login", methods=["POST"])
 def login():
-    data = request.get_json()
+    data = request.json
     email = data.get("email")
     password = data.get("password")
 
     user = users_db.get(email)
     if not user or not verify_password(password, user["password"]):
-        return jsonify({"message": "Invalid credentials"}), 401
+        return jsonify({"error": "Invalid credentials"}), 401
 
-    token = create_token(email)
-    return jsonify({"message": "Login successful", "token": token})
+    return jsonify({"token": create_token(email)})
 
-# ---------------- UPLOAD + ANALYZE ----------------
+# -------------------------------------------------
+# UPLOAD + ANALYZE
+# -------------------------------------------------
 @app.route("/upload", methods=["POST"])
 def upload():
-    image = request.files.get("image")
-    image_url = request.form.get("imageURL")
-    age = request.form.get("age")
-    gender = request.form.get("gender")
+    try:
+        image = request.files.get("image")
+        image_url = request.form.get("imageURL")
+        age = request.form.get("age")
+        gender = request.form.get("gender")
 
-    if image:
-        image_path = os.path.join(UPLOAD_FOLDER, image.filename)
-        image.save(image_path)
-    elif image_url:
-        resp = requests.get(image_url)
-        img = Image.open(BytesIO(resp.content))
-        image_path = os.path.join(UPLOAD_FOLDER, "downloaded.jpg")
-        img.save(image_path)
-    else:
-        return jsonify({"error": "No image provided"}), 400
+        if image:
+            image_path = os.path.join(UPLOAD_FOLDER, image.filename)
+            image.save(image_path)
+        elif image_url:
+            resp = requests.get(image_url, timeout=10)
+            img = Image.open(BytesIO(resp.content))
+            image_path = os.path.join(UPLOAD_FOLDER, "remote.jpg")
+            img.save(image_path)
+        else:
+            return jsonify({"error": "No image provided"}), 400
 
-    if not model:
-        return jsonify({"error": "Model not loaded"}), 500
+        if not model:
+            return jsonify({"error": "YOLO model not loaded"}), 500
 
-    results = model(image_path)
-    predicted = []
+        results = model(image_path)
+        predicted = set()
 
-    for r in results:
-        for c in r.boxes.cls:
-            predicted.append(class_names.get(int(c), "unknown"))
+        for r in results:
+            for cls in r.boxes.cls:
+                predicted.add(class_names.get(int(cls), "unknown"))
 
-    predicted = list(set(predicted))
+        prompt = (
+            f"Skin issues: {list(predicted)}. "
+            f"Age: {age}, Gender: {gender}. "
+            "Give skincare advice."
+        )
 
-    prompt = (
-        f"Predicted skin issues: {predicted}. "
-        f"Age: {age}, Gender: {gender}. "
-        "Provide skincare advice."
-    )
+        recommendations = send_to_groq(prompt)
 
-    recommendations = send_to_groq(prompt)
+        return jsonify({
+            "predicted_problems": list(predicted),
+            "recommendations": recommendations
+        })
 
-    return jsonify({
-        "predicted_problems": predicted,
-        "recommendations": recommendations,
+    except Exception as e:
+        print("❌ UPLOAD ERROR:", e)
+        return jsonify({"error": "AI processing failed"}), 500
 
-    })
-
-# ---------------- RENDER ENTRY POINT (FIXED) ----------------
+# -------------------------------------------------
+# RENDER ENTRY
+# -------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"Starting Flask server on port {port}...")
     app.run(host="0.0.0.0", port=port)
