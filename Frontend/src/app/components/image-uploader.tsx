@@ -8,7 +8,12 @@ import AnalysisResult from "./AnalysisResult"
 
 interface ImageUploaderProps {
   onClose: () => void
-  onSubmit: (data: { image: string | null; age: string; gender: string; imageUrl: string | null }) => void
+  onSubmit: (data: {
+    image: string | null
+    age: string
+    gender: string
+    imageUrl: string | null
+  }) => void
 }
 
 export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
@@ -20,7 +25,14 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [analysisResult, setAnalysisResult] = useState(null)
+  const [analysisResult, setAnalysisResult] = useState<any>(null)
+
+  /** ✅ BACKEND URL (Render) */
+  const API_URL = process.env.NEXT_PUBLIC_API_URL
+
+  if (!API_URL) {
+    console.error("NEXT_PUBLIC_API_URL is not defined")
+  }
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -76,7 +88,7 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
   }
 
   const handleSubmit = async () => {
-    if (image && age && gender) {
+    if (image && age && gender && API_URL) {
       setIsLoading(true)
       const formData = new FormData()
 
@@ -98,7 +110,7 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
       formData.append("gender", gender)
 
       try {
-        const response = await fetch("http://127.0.0.1:5000/upload", {
+        const response = await fetch(`${API_URL}/upload`, {
           method: "POST",
           body: formData,
         })
@@ -115,9 +127,11 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
           imageUrl: image,
         }
 
+        setAnalysisResult(analysisResults)
         onSubmit(analysisResults)
       } catch (error) {
         console.error("Error uploading data:", error)
+        alert("AI server error. Please try again.")
       } finally {
         setIsLoading(false)
       }
@@ -149,12 +163,20 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
             {image ? (
               <div className="mb-6">
                 <div className="w-64 h-64 mx-auto rounded-full overflow-hidden border-4 border-pink-200 shadow-lg">
-                  <img src={image || "/placeholder.svg"} alt="Uploaded" className="w-full h-full object-cover" />
+                  <img
+                    src={image || "/placeholder.svg"}
+                    alt="Uploaded"
+                    className="w-full h-full object-cover"
+                  />
                 </div>
               </div>
             ) : isCaptureMode ? (
               <div className="mb-6">
-                <video ref={videoRef} autoPlay className="w-full rounded-lg border-4 border-pink-200 shadow-lg" />
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  className="w-full rounded-lg border-4 border-pink-200 shadow-lg"
+                />
               </div>
             ) : (
               <div className="mb-6 border-2 border-dashed border-pink-300 rounded-lg p-8 text-center bg-pink-50">
@@ -178,7 +200,13 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
                 <Upload className="h-5 w-5 mr-2" />
                 Upload
               </button>
-              <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*" className="hidden" />
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+                accept="image/*"
+                className="hidden"
+              />
               <button
                 onClick={handleCapture}
                 disabled={!!image && !isCaptureMode}
@@ -232,7 +260,11 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
                 {["Male", "Female", "Other"].map((option) => (
                   <label
                     key={option}
-                    className={`flex items-center justify-center p-3 bg-pink-50 border border-pink-300 rounded-lg cursor-pointer transition-all hover:bg-pink-900 hover:text-white ${gender === option.toLowerCase() ? "text-white bg-pink-900 hover:text-white" : "text-pink-500 hover:text-white"}`}
+                    className={`flex items-center justify-center p-3 bg-pink-50 border border-pink-300 rounded-lg cursor-pointer transition-all hover:bg-pink-900 hover:text-white ${
+                      gender === option.toLowerCase()
+                        ? "text-white bg-pink-900 hover:text-white"
+                        : "text-pink-500 hover:text-white"
+                    }`}
                   >
                     <input
                       type="radio"
@@ -242,11 +274,7 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
                       checked={gender === option.toLowerCase()}
                       onChange={(e) => setGender(e.target.value)}
                     />
-                    <span
-                      className={`text-sm font-medium ${gender === option.toLowerCase() ? "text-white  " : " hover:text-white"}`}
-                    >
-                      {option}
-                    </span>
+                    <span className="text-sm font-medium">{option}</span>
                   </label>
                 ))}
               </div>
@@ -272,6 +300,7 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
             </div>
           </div>
         )}
+
         {(isLoading || analysisResult) && (
           <AnalysisResult
             isLoading={isLoading}
@@ -286,4 +315,3 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
     </motion.div>
   )
 }
-
