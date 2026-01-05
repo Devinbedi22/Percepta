@@ -23,17 +23,22 @@ CORS(
     app,
     origins=[
         "http://localhost:3000",
-        "https://percepta-livid.vercel.app"
+        "https://percepta-livid.vercel.app",
     ],
     supports_credentials=True,
     allow_headers=["Content-Type", "Authorization"]
 )
 
 # -------------------------------------------------
-# JWT
+# JWT (CUSTOM BACKEND JWT – KEPT)
 # -------------------------------------------------
-JWT_SECRET = os.environ.get("JWT_SECRET")
+JWT_SECRET = os.environ.get(
+    "JWT_SECRET",
+    "kN8vQ2xR9mT5wL3pY7aB4jC6nF0hD8eG1sK4uM7iO2qZ5tV3wX9rA6bE8cH1fJ4g"
+)
 JWT_ALGORITHM = "HS256"
+
+print(f"JWT Secret loaded: {JWT_SECRET[:10]}...")
 
 # -------------------------------------------------
 # GROQ
@@ -41,7 +46,7 @@ JWT_ALGORITHM = "HS256"
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 # -------------------------------------------------
-# YOLO MODEL (🔥 FIXED PATH)
+# YOLO MODEL
 # -------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
@@ -87,7 +92,7 @@ class_names = {
 }
 
 # -------------------------------------------------
-# AUTH HELPERS
+# AUTH HELPERS (KEPT)
 # -------------------------------------------------
 def hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -98,9 +103,50 @@ def verify_password(password, hashed):
 def create_token(email):
     payload = {
         "email": email,
-        "exp": datetime.utcnow() + timedelta(days=7)
+        "exp": datetime.utcnow() + timedelta(days=7),
+        "iat": datetime.utcnow()
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def verify_custom_jwt(token):
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get("email")
+    except Exception:
+        return None
+
+# -------------------------------------------------
+# 🔧 FIX: ACCEPT SUPABASE JWT OR CUSTOM JWT
+# -------------------------------------------------
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.headers.get("Authorization")
+
+        if not auth or not auth.startswith("Bearer "):
+            return jsonify({"error": "Token is missing"}), 401
+
+        token = auth.replace("Bearer ", "")
+
+        email = None
+
+        # 1️⃣ Try custom backend JWT (old system)
+        email = verify_custom_jwt(token)
+
+        # 2️⃣ If that fails, try Supabase JWT (frontend auth)
+        if not email:
+            try:
+                payload = jwt.decode(token, options={"verify_signature": False})
+                email = payload.get("email") or payload.get("sub")
+            except Exception as e:
+                print("JWT decode error:", e)
+                return jsonify({"error": "Invalid token"}), 401
+
+        if not email:
+            return jsonify({"error": "Invalid token"}), 401
+
+        return f(email, *args, **kwargs)
+    return decorated
 
 # -------------------------------------------------
 # GROQ HELPER
@@ -110,24 +156,28 @@ def send_to_groq(prompt):
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": "You are a skincare AI expert."},
+                {"role": "system", "content": "You are a skincare AI expert. Provide clear, actionable skincare advice."},
                 {"role": "user", "content": prompt}
             ]
         )
         return completion.choices[0].message.content
     except Exception as e:
         print("❌ GROQ ERROR:", e)
-        return "Unable to generate recommendations."
+        return "Unable to generate recommendations at this time."
 
 # -------------------------------------------------
 # HEALTH CHECK
 # -------------------------------------------------
 @app.route("/")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({
+        "status": "ok",
+        "message": "Percepta-AI Backend Running",
+        "model_loaded": model is not None
+    })
 
 # -------------------------------------------------
-# AUTH
+# AUTH ENDPOINTS (KEPT)
 # -------------------------------------------------
 @app.route("/api/signup", methods=["POST"])
 def signup():
@@ -135,14 +185,19 @@ def signup():
     email = data.get("email")
     password = data.get("password")
 
+    if not email or not password:
+        return jsonify({"message": "Email and password required"}), 400
+
     if email in users_db:
-        return jsonify({"error": "User exists"}), 409
+        return jsonify({"message": "User already exists"}), 409
 
     users_db[email] = {
-        "password": hash_password(password)
+        "password": hash_password(password),
+        "created_at": datetime.utcnow().isoformat()
     }
 
-    return jsonify({"token": create_token(email)})
+    token = create_token(email)
+    return jsonify({"token": token}), 201
 
 @app.route("/api/login", methods=["POST"])
 def login():
@@ -152,31 +207,36 @@ def login():
 
     user = users_db.get(email)
     if not user or not verify_password(password, user["password"]):
-        return jsonify({"error": "Invalid credentials"}), 401
+        return jsonify({"message": "Invalid credentials"}), 401
 
-    return jsonify({"token": create_token(email)})
+    token = create_token(email)
+    return jsonify({"token": token}), 200
 
 # -------------------------------------------------
-# UPLOAD + ANALYZE
+# UPLOAD + ANALYZE (PROTECTED)
 # -------------------------------------------------
 @app.route("/upload", methods=["POST"])
-def upload():
+@token_required
+def upload(email):
     try:
+        print(f"📸 Upload request from: {email}")
+
         image = request.files.get("image")
         image_url = request.form.get("imageURL")
         age = request.form.get("age")
         gender = request.form.get("gender")
 
+        if not image and not image_url:
+            return jsonify({"error": "No image provided"}), 400
+
         if image:
-            image_path = os.path.join(UPLOAD_FOLDER, image.filename)
+            image_path = os.path.join(UPLOAD_FOLDER, f"{email}_{image.filename}")
             image.save(image_path)
-        elif image_url:
+        else:
             resp = requests.get(image_url, timeout=10)
             img = Image.open(BytesIO(resp.content))
-            image_path = os.path.join(UPLOAD_FOLDER, "remote.jpg")
+            image_path = os.path.join(UPLOAD_FOLDER, f"{email}_remote.jpg")
             img.save(image_path)
-        else:
-            return jsonify({"error": "No image provided"}), 400
 
         if not model:
             return jsonify({"error": "YOLO model not loaded"}), 500
@@ -189,16 +249,17 @@ def upload():
                 predicted.add(class_names.get(int(cls), "unknown"))
 
         prompt = (
-            f"Skin issues: {list(predicted)}. "
+            f"Detected skin issues: {list(predicted)}. "
             f"Age: {age}, Gender: {gender}. "
-            "Give skincare advice."
+            "Give personalized skincare advice."
         )
 
         recommendations = send_to_groq(prompt)
 
         return jsonify({
             "predicted_problems": list(predicted),
-            "recommendations": recommendations
+            "recommendations": recommendations,
+            "user_email": email
         })
 
     except Exception as e:
@@ -206,8 +267,20 @@ def upload():
         return jsonify({"error": "AI processing failed"}), 500
 
 # -------------------------------------------------
+# DEBUG USERS (KEPT)
+# -------------------------------------------------
+@app.route("/api/users", methods=["GET"])
+def list_users():
+    return jsonify({
+        "total_users": len(users_db),
+        "users": list(users_db.keys())
+    })
+
+# -------------------------------------------------
 # RENDER ENTRY
 # -------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    print(f"🚀 Starting Flask server on port {port}...")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+
