@@ -21,12 +21,16 @@ app = Flask(__name__)
 
 CORS(
     app,
-    origins=[
-        "http://localhost:3000",
-        "https://percepta-livid.vercel.app",
-    ],
-    supports_credentials=True,
-    allow_headers=["Content-Type", "Authorization"]
+    resources={r"/*": {
+        "origins": [
+            "http://localhost:3000",
+            "https://percepta-livid.vercel.app",
+        ],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type"],
+        "supports_credentials": True,
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    }}
 )
 
 # -------------------------------------------------
