@@ -19,6 +19,9 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# -------------------------------------------------
+# FIXED CORS CONFIGURATION
+# -------------------------------------------------
 CORS(
     app,
     resources={r"/*": {
@@ -63,19 +66,24 @@ print(f"Supabase JWT Secret loaded: {SUPABASE_JWT_SECRET[:10] if SUPABASE_JWT_SE
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 # -------------------------------------------------
-# YOLO MODEL
+# YOLO MODEL (LAZY LOADING TO SAVE MEMORY)
 # -------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
+model = None
 
-print("Looking for YOLO model at:", MODEL_PATH)
-
-try:
-    model = YOLO(MODEL_PATH)
-    print("✅ YOLO model loaded successfully")
-except Exception as e:
-    print("❌ YOLO model failed to load:", e)
-    model = None
+def load_model():
+    """Load YOLO model only when needed"""
+    global model
+    if model is None:
+        try:
+            print("🔄 Loading YOLO model...")
+            model = YOLO(MODEL_PATH)
+            print("✅ YOLO model loaded successfully")
+        except Exception as e:
+            print(f"❌ YOLO model failed to load: {e}")
+            raise
+    return model
 
 # -------------------------------------------------
 # UPLOADS
@@ -189,7 +197,7 @@ def health():
     return jsonify({
         "status": "ok",
         "message": "Percepta-AI Backend Running",
-        "model_loaded": model is not None,
+        "model_loaded": os.path.exists(MODEL_PATH),
         "supabase_connected": supabase is not None
     })
 
@@ -224,13 +232,13 @@ def upload(email, user_id):
             img.save(image_path)
             print(f"💾 Remote image saved: {image_path}")
 
-        if not model:
-            print("❌ YOLO model not loaded")
-            return jsonify({"error": "YOLO model not loaded"}), 500
+        # Load model only when needed (saves memory)
+        print("🔄 Loading YOLO model...")
+        current_model = load_model()
 
         # Run YOLO detection
         print("🔍 Running YOLO detection...")
-        results = model(image_path)
+        results = current_model(image_path)
         predicted = set()
 
         for r in results:
@@ -315,7 +323,7 @@ def debug():
         "supabase_key_set": bool(SUPABASE_KEY),
         "supabase_jwt_secret_set": bool(SUPABASE_JWT_SECRET),
         "groq_api_key_set": bool(os.environ.get("GROQ_API_KEY")),
-        "model_loaded": model is not None,
+        "model_exists": os.path.exists(MODEL_PATH),
         "supabase_connected": supabase is not None
     })
 
