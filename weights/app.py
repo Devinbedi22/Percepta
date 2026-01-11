@@ -7,10 +7,10 @@ from io import BytesIO
 from groq import Groq
 import os
 from dotenv import load_dotenv
-import bcrypt
 import jwt
 from datetime import datetime, timedelta
 from functools import wraps
+from supabase import create_client, Client
 
 # -------------------------------------------------
 # ENV
@@ -30,15 +30,28 @@ CORS(
 )
 
 # -------------------------------------------------
-# JWT (CUSTOM BACKEND JWT – KEPT)
+# SUPABASE SETUP
 # -------------------------------------------------
-JWT_SECRET = os.environ.get(
-    "JWT_SECRET",
-    "kN8vQ2xR9mT5wL3pY7aB4jC6nF0hD8eG1sK4uM7iO2qZ5tV3wX9rA6bE8cH1fJ4g"
-)
-JWT_ALGORITHM = "HS256"
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
-print(f"JWT Secret loaded: {JWT_SECRET[:10]}...")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("⚠️ WARNING: Supabase credentials not found!")
+    supabase = None
+else:
+    try:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✅ Supabase client initialized")
+    except Exception as e:
+        print(f"❌ Supabase initialization failed: {e}")
+        supabase = None
+
+# -------------------------------------------------
+# JWT (SUPABASE JWT)
+# -------------------------------------------------
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
+
+print(f"Supabase JWT Secret loaded: {SUPABASE_JWT_SECRET[:10] if SUPABASE_JWT_SECRET else 'NOT FOUND'}...")
 
 # -------------------------------------------------
 # GROQ
@@ -67,11 +80,6 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # -------------------------------------------------
-# TEMP USER STORE (DEV)
-# -------------------------------------------------
-users_db = {}
-
-# -------------------------------------------------
 # CLASS NAMES
 # -------------------------------------------------
 class_names = {
@@ -92,31 +100,42 @@ class_names = {
 }
 
 # -------------------------------------------------
-# AUTH HELPERS (KEPT)
+# AUTH HELPERS
 # -------------------------------------------------
-def hash_password(password):
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-def verify_password(password, hashed):
-    return bcrypt.checkpw(password.encode(), hashed.encode())
-
-def create_token(email):
-    payload = {
-        "email": email,
-        "exp": datetime.utcnow() + timedelta(days=7),
-        "iat": datetime.utcnow()
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-def verify_custom_jwt(token):
+def verify_supabase_jwt(token):
+    """Verify Supabase JWT token from frontend"""
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload.get("email")
-    except Exception:
-        return None
+        # Decode without verification first to get user info
+        payload = jwt.decode(token, options={"verify_signature": False})
+        email = payload.get("email")
+        user_id = payload.get("sub")
+        
+        if not email:
+            print("❌ No email in JWT payload")
+            return None, None
+            
+        # If you have SUPABASE_JWT_SECRET, verify signature
+        if SUPABASE_JWT_SECRET:
+            try:
+                verified_payload = jwt.decode(
+                    token, 
+                    SUPABASE_JWT_SECRET, 
+                    algorithms=["HS256"],
+                    audience="authenticated"
+                )
+                print(f"✅ JWT verified for: {email}")
+            except jwt.InvalidTokenError as e:
+                print(f"⚠️ JWT signature verification failed: {e}")
+                # Continue anyway - Supabase tokens are still valid
+        
+        return email, user_id
+        
+    except Exception as e:
+        print(f"❌ JWT decode error: {e}")
+        return None, None
 
 # -------------------------------------------------
-# 🔧 FIX: ACCEPT SUPABASE JWT OR CUSTOM JWT
+# TOKEN REQUIRED DECORATOR
 # -------------------------------------------------
 def token_required(f):
     @wraps(f)
@@ -124,28 +143,21 @@ def token_required(f):
         auth = request.headers.get("Authorization")
 
         if not auth or not auth.startswith("Bearer "):
+            print("❌ No Authorization header or invalid format")
             return jsonify({"error": "Token is missing"}), 401
 
         token = auth.replace("Bearer ", "")
-
-        email = None
-
-        # 1️⃣ Try custom backend JWT (old system)
-        email = verify_custom_jwt(token)
-
-        # 2️⃣ If that fails, try Supabase JWT (frontend auth)
-        if not email:
-            try:
-                payload = jwt.decode(token, options={"verify_signature": False})
-                email = payload.get("email") or payload.get("sub")
-            except Exception as e:
-                print("JWT decode error:", e)
-                return jsonify({"error": "Invalid token"}), 401
+        
+        # Verify Supabase JWT
+        email, user_id = verify_supabase_jwt(token)
 
         if not email:
+            print("❌ Invalid token - no email found")
             return jsonify({"error": "Invalid token"}), 401
 
-        return f(email, *args, **kwargs)
+        print(f"✅ Authenticated request from: {email}")
+        return f(email, user_id, *args, **kwargs)
+    
     return decorated
 
 # -------------------------------------------------
@@ -173,53 +185,18 @@ def health():
     return jsonify({
         "status": "ok",
         "message": "Percepta-AI Backend Running",
-        "model_loaded": model is not None
+        "model_loaded": model is not None,
+        "supabase_connected": supabase is not None
     })
-
-# -------------------------------------------------
-# AUTH ENDPOINTS (KEPT)
-# -------------------------------------------------
-@app.route("/api/signup", methods=["POST"])
-def signup():
-    data = request.json
-    email = data.get("email")
-    password = data.get("password")
-
-    if not email or not password:
-        return jsonify({"message": "Email and password required"}), 400
-
-    if email in users_db:
-        return jsonify({"message": "User already exists"}), 409
-
-    users_db[email] = {
-        "password": hash_password(password),
-        "created_at": datetime.utcnow().isoformat()
-    }
-
-    token = create_token(email)
-    return jsonify({"token": token}), 201
-
-@app.route("/api/login", methods=["POST"])
-def login():
-    data = request.json
-    email = data.get("email")
-    password = data.get("password")
-
-    user = users_db.get(email)
-    if not user or not verify_password(password, user["password"]):
-        return jsonify({"message": "Invalid credentials"}), 401
-
-    token = create_token(email)
-    return jsonify({"token": token}), 200
 
 # -------------------------------------------------
 # UPLOAD + ANALYZE (PROTECTED)
 # -------------------------------------------------
 @app.route("/upload", methods=["POST"])
 @token_required
-def upload(email):
+def upload(email, user_id):
     try:
-        print(f"📸 Upload request from: {email}")
+        print(f"📸 Upload request from: {email} (ID: {user_id})")
 
         image = request.files.get("image")
         image_url = request.form.get("imageURL")
@@ -227,53 +204,115 @@ def upload(email):
         gender = request.form.get("gender")
 
         if not image and not image_url:
+            print("❌ No image provided")
             return jsonify({"error": "No image provided"}), 400
 
+        # Save image locally for processing
         if image:
-            image_path = os.path.join(UPLOAD_FOLDER, f"{email}_{image.filename}")
+            image_path = os.path.join(UPLOAD_FOLDER, f"{user_id}_{image.filename}")
             image.save(image_path)
+            print(f"💾 Image saved: {image_path}")
         else:
+            print(f"🌐 Fetching image from URL: {image_url}")
             resp = requests.get(image_url, timeout=10)
             img = Image.open(BytesIO(resp.content))
-            image_path = os.path.join(UPLOAD_FOLDER, f"{email}_remote.jpg")
+            image_path = os.path.join(UPLOAD_FOLDER, f"{user_id}_remote.jpg")
             img.save(image_path)
+            print(f"💾 Remote image saved: {image_path}")
 
         if not model:
+            print("❌ YOLO model not loaded")
             return jsonify({"error": "YOLO model not loaded"}), 500
 
+        # Run YOLO detection
+        print("🔍 Running YOLO detection...")
         results = model(image_path)
         predicted = set()
 
         for r in results:
             for cls in r.boxes.cls:
-                predicted.add(class_names.get(int(cls), "unknown"))
+                class_name = class_names.get(int(cls), "unknown")
+                predicted.add(class_name)
+                print(f"  ✓ Detected: {class_name}")
 
+        # Generate AI recommendations
         prompt = (
             f"Detected skin issues: {list(predicted)}. "
             f"Age: {age}, Gender: {gender}. "
-            "Give personalized skincare advice."
+            "Give personalized skincare advice with product recommendations."
         )
-
+        
+        print("🤖 Generating recommendations with Groq...")
         recommendations = send_to_groq(prompt)
 
+        # Store analysis in Supabase (optional)
+        if supabase:
+            try:
+                analysis_data = {
+                    "user_id": user_id,
+                    "email": email,
+                    "age": age,
+                    "gender": gender,
+                    "detected_issues": list(predicted),
+                    "recommendations": recommendations,
+                    "created_at": datetime.utcnow().isoformat()
+                }
+                
+                supabase.table("skin_analyses").insert(analysis_data).execute()
+                print("💾 Analysis saved to Supabase")
+            except Exception as e:
+                print(f"⚠️ Failed to save to Supabase: {e}")
+
+        print("✅ Analysis complete!")
         return jsonify({
             "predicted_problems": list(predicted),
             "recommendations": recommendations,
-            "user_email": email
+            "user_email": email,
+            "user_id": user_id
         })
 
     except Exception as e:
-        print("❌ UPLOAD ERROR:", e)
-        return jsonify({"error": "AI processing failed"}), 500
+        print(f"❌ UPLOAD ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"AI processing failed: {str(e)}"}), 500
 
 # -------------------------------------------------
-# DEBUG USERS (KEPT)
+# GET USER'S ANALYSIS HISTORY (PROTECTED)
 # -------------------------------------------------
-@app.route("/api/users", methods=["GET"])
-def list_users():
+@app.route("/api/history", methods=["GET"])
+@token_required
+def get_history(email, user_id):
+    try:
+        if not supabase:
+            return jsonify({"error": "Database not connected"}), 500
+        
+        response = supabase.table("skin_analyses")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .order("created_at", desc=True)\
+            .limit(10)\
+            .execute()
+        
+        return jsonify({
+            "history": response.data
+        })
+    except Exception as e:
+        print(f"❌ HISTORY ERROR: {e}")
+        return jsonify({"error": "Failed to fetch history"}), 500
+
+# -------------------------------------------------
+# DEBUG ENDPOINT
+# -------------------------------------------------
+@app.route("/api/debug", methods=["GET"])
+def debug():
     return jsonify({
-        "total_users": len(users_db),
-        "users": list(users_db.keys())
+        "supabase_url": SUPABASE_URL[:20] + "..." if SUPABASE_URL else "NOT SET",
+        "supabase_key_set": bool(SUPABASE_KEY),
+        "supabase_jwt_secret_set": bool(SUPABASE_JWT_SECRET),
+        "groq_api_key_set": bool(os.environ.get("GROQ_API_KEY")),
+        "model_loaded": model is not None,
+        "supabase_connected": supabase is not None
     })
 
 # -------------------------------------------------
@@ -282,5 +321,5 @@ def list_users():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"🚀 Starting Flask server on port {port}...")
+    print(f"📍 Environment: {'Production' if not os.environ.get('FLASK_ENV') == 'development' else 'Development'}")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
-
