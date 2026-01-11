@@ -5,6 +5,7 @@ import { useState, useRef } from "react"
 import { motion } from "framer-motion"
 import { Upload, Camera, X, Sun } from "lucide-react"
 import AnalysisResult from "./AnalysisResult"
+import { supabase } from "@/lib/supabaseClient"   // ✅ ADDED
 
 interface ImageUploaderProps {
   onClose: () => void
@@ -87,56 +88,74 @@ export function ImageUploader({ onClose, onSubmit }: ImageUploaderProps) {
     }
   }
 
-   const handleSubmit = async () => {
-  if (!image || !age || !gender || !API_URL) {
-    alert("Missing required data")
-    return
+  const handleSubmit = async () => {
+    if (!image || !age || !gender || !API_URL) {
+      alert("Missing required data")
+      return
+    }
+
+    // ✅ SUPABASE SESSION TOKEN (FIXED)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+
+    if (!session?.access_token) {
+      alert("Please login first to use skin analysis")
+      window.location.href = "/login"
+      return
+    }
+
+    const token = session.access_token
+
+    setIsLoading(true)
+    const formData = new FormData()
+
+    try {
+      // ✅ Convert base64 → Blob
+      const byteCharacters = atob(image.split(",")[1])
+      const byteNumbers = new Array(byteCharacters.length)
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i)
+      }
+      const byteArray = new Uint8Array(byteNumbers)
+      const blob = new Blob([byteArray], { type: "image/jpeg" })
+
+      // ✅ MUST MATCH Flask: request.files["image"]
+      formData.append("image", blob, "image.jpg")
+      formData.append("age", age)
+      formData.append("gender", gender)
+
+      console.log("Uploading to:", `${API_URL}/upload`)
+
+      const response = await fetch(`${API_URL}/upload`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,   // ✅ CORRECT TOKEN
+        },
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Server error: ${response.status}`)
+      }
+
+      const result = await response.json()
+
+      const analysisResults = {
+        ...result,
+        imageUrl: image,
+      }
+
+      setAnalysisResult(analysisResults)
+      onSubmit(analysisResults)
+    } catch (error: any) {
+      console.error("Error uploading data:", error)
+      alert(error.message || "AI server error. Please try again.")
+    } finally {
+      setIsLoading(false)
+    }
   }
-
-  setIsLoading(true)
-  const formData = new FormData()
-
-  try {
-    // ✅ Convert base64 → Blob
-    const byteCharacters = atob(image.split(",")[1])
-    const byteNumbers = new Array(byteCharacters.length)
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i)
-    }
-    const byteArray = new Uint8Array(byteNumbers)
-    const blob = new Blob([byteArray], { type: "image/jpeg" })
-
-    // ✅ MUST MATCH Flask: request.files["file"]
-    formData.append("file", blob, "image.jpg")
-    formData.append("age", age)
-    formData.append("gender", gender)
-
-    const response = await fetch(`${API_URL}/upload`, {
-      method: "POST",
-      body: formData,
-    })
-
-    if (!response.ok) {
-      throw new Error(`Server error: ${response.status}`)
-    }
-
-    const result = await response.json()
-
-    const analysisResults = {
-      ...result,
-      imageUrl: image,
-    }
-
-    setAnalysisResult(analysisResults)
-    onSubmit(analysisResults)
-  } catch (error) {
-    console.error("Error uploading data:", error)
-    alert("AI server error. Please try again.")
-  } finally {
-    setIsLoading(false)
-  }
-}
-
 
   return (
     <motion.div
