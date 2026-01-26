@@ -3,11 +3,10 @@ title: Percepta Backend
 emoji: 🧠
 colorFrom: blue
 colorTo: purple
-sdk: python
-python_version: "3.11"
-app_file: weights/app.py
+sdk: docker
 pinned: false
 ---
+
 # Percepta AI - Hackathon Edition
 
 Percepta AI is an innovative project built for hackathons that leverages the power of the YOLO model from the [`ultralytics`](https://github.com/ultralytics/ultralytics) library to perform real-time object detection, segmentation, pose estimation, and image classification.
