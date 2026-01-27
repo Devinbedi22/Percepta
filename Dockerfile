@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for OpenCV
+# System dependencies for OpenCV / YOLO
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -12,17 +12,20 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the entire project
+# Copy entire project
 COPY . .
 
-# Expose port
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Install torch separately (CPU-only)
+RUN pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining Python deps
+RUN pip install -r weights/requirements.txt
+
+# Expose Flask port
 EXPOSE 7860
 
-# Run the app from the weights directory
+# Start Flask app
 CMD ["python", "weights/app.py"]
