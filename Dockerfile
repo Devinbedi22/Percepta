@@ -19,7 +19,9 @@ COPY . .
 RUN pip install --upgrade pip
 
 # Install torch separately (CPU-only)
-RUN pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install "torch<2.6" "torchvision<0.21" \
+    --extra-index-url https://download.pytorch.org/whl/cpu
+
 
 # Install remaining Python deps
 RUN pip install -r weights/requirements.txt
