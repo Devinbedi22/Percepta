@@ -262,8 +262,8 @@ def upload(email, user_id):
 
         for r in results:
             if r.boxes is None:
-            print("⚠️ No detections found")
-            continue
+                print("⚠️ No detections found")
+                continue
 
         for cls in r.boxes.cls.cpu().numpy().astype(int):
             class_name = class_names.get(cls, "unknown")
