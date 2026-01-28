@@ -259,12 +259,16 @@ def upload(email, user_id):
         print("🔍 Running YOLO detection...")
         results = current_model(image_path)
         predicted = set()
-
+        
         for r in results:
-            for cls in r.boxes.cls:
-                class_name = class_names.get(int(cls), "unknown")
-                predicted.add(class_name)
-                print(f"  ✓ Detected: {class_name}")
+            if r.boxes is None:
+                print("⚠️ No detections found")
+                continue
+
+    for cls in r.boxes.cls.cpu().numpy().astype(int):
+        class_name = class_names.get(cls, "unknown")
+        predicted.add(class_name)
+        print(f"  ✓ Detected: {class_name}")
 
         # Generate AI recommendations
         prompt = (
@@ -296,6 +300,7 @@ def upload(email, user_id):
 
         print("✅ Analysis complete!")
         return jsonify({
+            "detected_issues": list(predicted),
             "predicted_problems": list(predicted),
             "recommendations": recommendations,
             "user_email": email,
