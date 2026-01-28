@@ -13,16 +13,4 @@ supabase==2.10.0
 gspread
 torch
 torchvision
-<<<<<<< HEAD
 gunicorn==21.2.0
-=======
-numpy
-opencv-python-headless
-pillow
-requests
-python-dotenv
-groq
-bcrypt
-pyjwt
-supabase==2.10.0
->>>>>>> 710db29 (Add supabase dependency)
