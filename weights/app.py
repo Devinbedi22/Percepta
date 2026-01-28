@@ -259,16 +259,27 @@ def upload(email, user_id):
         print("🔍 Running YOLO detection...")
         results = current_model(image_path)
         predicted = set()
+        results_payload = []
 
         for r in results:
-            if r.boxes is None:
-                print("⚠️ No detections found")
+            if r.boxes is None or r.boxes.cls is None:
+                print("⚠️ No detections found in this result")
                 continue
+ 
+            classes = r.boxes.cls.cpu().numpy().astype(int)
+            confidences = r.boxes.conf.cpu().numpy()
 
-        for cls in r.boxes.cls.cpu().numpy().astype(int):
+        for cls, conf in zip(classes, confidences):
             class_name = class_names.get(cls, "unknown")
             predicted.add(class_name)
-            print(f"  ✓ Detected: {class_name}")
+
+            results_payload.append({
+                "problem": class_name,
+                "confidence": float(conf)
+            })
+
+            print(f"  ✓ Detected: {class_name} ({conf:.2f})")
+
 
         # Generate AI recommendations
         prompt = (
@@ -300,7 +311,7 @@ def upload(email, user_id):
 
         print("✅ Analysis complete!")
         return jsonify({
-            "detected_issues": list(predicted),
+            "results": results_payload,
             "predicted_problems": list(predicted),
             "recommendations": recommendations,
             "user_email": email,
