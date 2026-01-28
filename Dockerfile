@@ -2,19 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-<<<<<<< HEAD
 # System dependencies for OpenCV / YOLO
 RUN apt-get update && apt-get install -y \
     libgl1 \
-=======
-# Install system dependencies for OpenCV
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
->>>>>>> e90632b (Add backend files)
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
+    libxrender1 \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -24,12 +18,11 @@ COPY . .
 # Upgrade pip
 RUN pip install --upgrade pip
 
-# Install torch separately (CPU-only)
+# Install torch (CPU-only, compatible with ultralytics)
 RUN pip install "torch<2.6" "torchvision<0.21" \
     --extra-index-url https://download.pytorch.org/whl/cpu
 
-
-# Install remaining Python deps
+# Install remaining Python dependencies
 RUN pip install -r weights/requirements.txt
 
 # Expose Flask port
