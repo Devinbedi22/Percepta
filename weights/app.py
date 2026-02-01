@@ -257,7 +257,7 @@ def upload(email, user_id):
 
         # Run YOLO detection
         print("🔍 Running YOLO detection...")
-        results = current_model(image_path,cong=0.05)
+        results = current_model(image_path, conf=0.05)
         predicted = set()
         results_payload = []
 
