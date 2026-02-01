@@ -257,7 +257,7 @@ def upload(email, user_id):
 
         # Run YOLO detection
         print("🔍 Running YOLO detection...")
-        results = current_model(image_path)
+        results = current_model(image_path,cong=0.05)
         predicted = set()
         results_payload = []
 
@@ -268,7 +268,7 @@ def upload(email, user_id):
  
             classes = r.boxes.cls.cpu().numpy().astype(int)
             confidences = r.boxes.conf.cpu().numpy()
-            CONF_THRESHOLD = 0.35
+            CONF_THRESHOLD = 0.05
 
             for cls, conf in zip(classes, confidences):
                 if conf < CONF_THRESHOLD:
