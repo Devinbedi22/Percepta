@@ -268,17 +268,20 @@ def upload(email, user_id):
  
             classes = r.boxes.cls.cpu().numpy().astype(int)
             confidences = r.boxes.conf.cpu().numpy()
+            CONF_THRESHOLD = 0.35
 
-        for cls, conf in zip(classes, confidences):
-            class_name = class_names.get(cls, "unknown")
-            predicted.add(class_name)
+            for cls, conf in zip(classes, confidences):
+                if conf < CONF_THRESHOLD:
+                    continue
+                class_name = class_names.get(cls, "unknown")
+                predicted.add(class_name)
 
-            results_payload.append({
-                "problem": class_name,
-                "confidence": float(conf)
-            })
+                results_payload.append({
+                    "problem": class_name,
+                    "confidence": float(conf)
+                })
 
-            print(f"  ✓ Detected: {class_name} ({conf:.2f})")
+                print(f"  ✓ Detected: {class_name} ({conf:.2f})")
 
 
         # Generate AI recommendations
