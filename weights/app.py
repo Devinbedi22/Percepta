@@ -280,7 +280,7 @@ def upload(email, user_id):
                     "problem": class_name,
                     "confidence": float(conf)
                 })
-
+                print("RAW CLASS ID:", cls)
                 print(f"  ✓ Detected: {class_name} ({conf:.2f})")
 
 
