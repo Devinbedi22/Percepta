@@ -273,7 +273,7 @@ def upload(email, user_id):
             for cls, conf in zip(classes, confidences):
                 if conf < CONF_THRESHOLD:
                     continue
-                class_name = class_names.get(cls, "unknown")
+                class_name = current_model.names[int(cls)]
                 predicted.add(class_name)
 
                 results_payload.append({
