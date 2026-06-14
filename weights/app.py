@@ -273,7 +273,14 @@ def upload(email, user_id):
             for cls, conf in zip(classes, confidences):
                 if conf < CONF_THRESHOLD:
                     continue
-                class_name = current_model.names[int(cls)]
+                class_name = str(current_model.names[int(cls)] or "").strip()
+                if (
+                    not class_name
+                    or class_name.lower() == "nan"
+                    or class_name == "None"
+                    or class_name.isnumeric()
+                ):
+                    class_name = "Unknown Skin Condition"
                 predicted.add(class_name)
 
                 results_payload.append({
