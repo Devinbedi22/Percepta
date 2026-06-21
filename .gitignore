@@ -83,7 +83,4 @@ next-env.d.ts
 # Optional: Large model files (uncomment if you don't want to push weights)
 # weights/*.pt
 # weights/*.pthpercepta-ai/
-Frontend/
-Frontend/
-Frontend/
 uploads/
