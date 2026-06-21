@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from ultralytics import YOLO
 import requests
@@ -7,8 +7,10 @@ from io import BytesIO
 from groq import Groq
 import os
 from dotenv import load_dotenv
+import uuid
 import jwt
-from datetime import datetime, timedelta
+from jwt import PyJWKClient
+from datetime import datetime
 from functools import wraps
 from supabase import create_client, Client
 import torch
@@ -43,10 +45,16 @@ CORS(
 )
 
 # -------------------------------------------------
+# APPLICATION CONFIG
+# -------------------------------------------------
+print("ℹ️ Percepta Backend with Supabase Authentication and History Storage")
+
+# -------------------------------------------------
 # SUPABASE SETUP
 # -------------------------------------------------
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("⚠️ WARNING: Supabase credentials not found!")
@@ -59,12 +67,10 @@ else:
         print(f"❌ Supabase initialization failed: {e}")
         supabase = None
 
-# -------------------------------------------------
-# JWT (SUPABASE JWT)
-# -------------------------------------------------
-SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
-
-print(f"Supabase JWT Secret loaded: {SUPABASE_JWT_SECRET[:10] if SUPABASE_JWT_SECRET else 'NOT FOUND'}...")
+if SUPABASE_JWT_SECRET:
+    print(f"✅ JWT Secret loaded for signature verification")
+else:
+    print("⚠️ JWT Secret not configured - signature verification disabled")
 
 # -------------------------------------------------
 # GROQ
@@ -84,18 +90,27 @@ def load_model():
     if model is None:
         try:
             print("🔄 Loading YOLO model...")
-            
-            # Set PyTorch to use legacy loading for compatibility
-            # This allows loading models saved with older PyTorch versions
-            torch.serialization.add_safe_globals([
-                'ultralytics.nn.tasks.DetectionModel',
-                'ultralytics.yolo.utils.torch_utils',
-                'collections.OrderedDict'
-            ])
-            
-            # Load YOLO model
-            model = YOLO(MODEL_PATH)
+
+            # Force standard PyTorch loading for this locally trusted checkpoint.
+            # PyTorch 2.6+ uses weights_only=True by default for torch.load, and
+            # older Ultralytics checkpoints may require weights_only=False to load.
+            original_torch_load = torch.load
+
+            def _torch_load_with_weights_only_false(f, *args, **kwargs):
+                if "weights_only" not in kwargs:
+                    kwargs["weights_only"] = False
+                return original_torch_load(f, *args, **kwargs)
+
+            torch.load = _torch_load_with_weights_only_false
+            try:
+                model = YOLO(MODEL_PATH)
+            finally:
+                torch.load = original_torch_load
+
             print("✅ YOLO model loaded successfully")
+            print("Loaded model class names:")
+            for idx, name in sorted(model.names.items()):
+                print(f"  {idx}: {name}")
         except Exception as e:
             print(f"❌ YOLO model failed to load: {e}")
             print(f"⚠️ Make sure 'best.pt' exists at: {MODEL_PATH}")
@@ -103,6 +118,38 @@ def load_model():
             traceback.print_exc()
             raise
     return model
+
+
+def normalize_label(label: str) -> str:
+    normalized = label.strip().lower().replace('_', ' ').replace('-', ' ')
+    mapping = {
+        'whitehead': 'Whiteheads',
+        'whiteheads': 'Whiteheads',
+        'wrinkle': 'Wrinkles',
+        'wrinkles': 'Wrinkles',
+        'dark spot': 'Dark Spots',
+        'dark spots': 'Dark Spots',
+        'dark_spot': 'Dark Spots',
+        'skinredness': 'Skin Redness',
+        'skin redness': 'Skin Redness',
+        'acne': 'Acne',
+        'acne scar': 'Acne Scars',
+        'blackhead': 'Blackheads',
+        'blackheads': 'Blackheads',
+        'freckle': 'Freckles',
+        'freckles': 'Freckles',
+        'melasma': 'Melasma',
+        'nodule': 'Nodules',
+        'nodules': 'Nodules',
+        'papule': 'Papules',
+        'papules': 'Papules',
+        'pustule': 'Pustules',
+        'pustules': 'Pustules',
+        'vascular': 'Vascular',
+        'dark circle': 'Dark Circles',
+        'eyebag': 'Eyebags',
+    }
+    return mapping.get(normalized, normalized.title())
 
 # -------------------------------------------------
 # UPLOADS
@@ -130,64 +177,120 @@ class_names = {
     13: 'wrinkle'
 }
 
+ACNE_RELATED_CLASSES = {'Whiteheads', 'Blackheads', 'Papules', 'Pustules', 'Nodules'}
+
+
+def get_severity_label(confidence: float | None) -> str:
+    if confidence is None:
+        return 'Low'
+    if confidence >= 0.6:
+        return 'High'
+    if confidence >= 0.35:
+        return 'Moderate'
+    if confidence >= 0.15:
+        return 'Mild'
+    return 'Low'
+
 # -------------------------------------------------
-# AUTH HELPERS
+# JWT VERIFICATION
 # -------------------------------------------------
 def verify_supabase_jwt(token):
-    """Verify Supabase JWT token from frontend"""
+    """Verify JWT token issued by Supabase"""
     try:
-        # Decode without verification first to get user info
-        payload = jwt.decode(token, options={"verify_signature": False})
-        email = payload.get("email")
-        user_id = payload.get("sub")
-        
-        if not email:
-            print("❌ No email in JWT payload")
-            return None, None
-            
-        # If you have SUPABASE_JWT_SECRET, verify signature
-        if SUPABASE_JWT_SECRET:
-            try:
-                verified_payload = jwt.decode(
-                    token, 
-                    SUPABASE_JWT_SECRET, 
-                    algorithms=["HS256"],
-                    audience="authenticated"
-                )
-                print(f"✅ JWT verified for: {email}")
-            except jwt.InvalidTokenError as e:
-                print(f"⚠️ JWT signature verification failed: {e}")
-                # Continue anyway - Supabase tokens are still valid
-        
-        return email, user_id
-        
-    except Exception as e:
-        print(f"❌ JWT decode error: {e}")
-        return None, None
+        # Remove 'Bearer ' prefix if present
+        if token.startswith('Bearer '):
+            token = token[7:]
 
-# -------------------------------------------------
-# TOKEN REQUIRED DECORATOR
-# -------------------------------------------------
+        # Log header and payload before verification
+        header = jwt.get_unverified_header(token)
+        payload_unverified = jwt.decode(token, options={"verify_signature": False})
+        print("JWT Header:", header)
+        print("JWT Payload:", payload_unverified)
+
+        alg = header.get("alg")
+        if not alg:
+            print("❌ JWT verification error: alg header missing")
+            return None
+
+        expected_audience = "authenticated"
+        token_audience = payload_unverified.get("aud")
+        print("Expected audience:", expected_audience)
+        print("Token audience:", token_audience)
+
+        if alg == "HS256":
+            if not SUPABASE_JWT_SECRET:
+                print("⚠️ JWT_SECRET not configured - cannot verify HS256 signature")
+                return None
+
+            payload = jwt.decode(
+                token,
+                SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                audience=expected_audience,
+            )
+            print("Decoded payload:", payload)
+            return payload
+
+        if alg in {"RS256", "ES256"}:
+            if not SUPABASE_URL:
+                print("⚠️ SUPABASE_URL not configured - cannot fetch JWKS for token verification")
+                return None
+
+            jwks_url = f"{SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
+            print(f"🔐 Verifying {alg} token with JWKS URL:", jwks_url)
+            jwk_client = PyJWKClient(jwks_url)
+            signing_key = jwk_client.get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=[alg],
+                audience=expected_audience,
+            )
+            print("Decoded payload:", payload)
+            return payload
+
+        print(f"❌ JWT verification error: unsupported alg '{alg}'")
+        return None
+    except jwt.ExpiredSignatureError:
+        print("❌ JWT token has expired")
+        return None
+    except jwt.InvalidSignatureError:
+        print("❌ JWT signature is invalid")
+        return None
+    except Exception as e:
+        print(f"❌ JWT verification error: {e}")
+        return None
+
 def token_required(f):
+    """Decorator to require valid JWT token for route"""
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth = request.headers.get("Authorization")
-
-        if not auth or not auth.startswith("Bearer "):
-            print("❌ No Authorization header or invalid format")
-            return jsonify({"error": "Token is missing"}), 401
-
-        token = auth.replace("Bearer ", "")
+        token = None
         
-        # Verify Supabase JWT
-        email, user_id = verify_supabase_jwt(token)
-
-        if not email:
-            print("❌ Invalid token - no email found")
-            return jsonify({"error": "Invalid token"}), 401
-
-        print(f"✅ Authenticated request from: {email}")
-        return f(email, user_id, *args, **kwargs)
+        # Check Authorization header
+        if 'Authorization' in request.headers:
+            try:
+                auth_header = request.headers['Authorization']
+                if auth_header.startswith('Bearer '):
+                    token = auth_header[7:]
+                else:
+                    token = auth_header
+            except:
+                return jsonify({'error': 'Invalid Authorization header'}), 401
+        
+        if not token:
+            return jsonify({'error': 'Missing or invalid token'}), 401
+        
+        # Verify token
+        payload = verify_supabase_jwt(token)
+        if not payload:
+            return jsonify({'error': 'Invalid or expired token'}), 401
+        
+        # Store user info in request context
+        request.user_id = payload.get('sub')
+        request.user_email = payload.get('email')
+        
+        return f(*args, **kwargs)
     
     return decorated
 
@@ -217,22 +320,23 @@ def health():
         "status": "ok",
         "message": "Percepta-AI Backend Running",
         "model_loaded": os.path.exists(MODEL_PATH),
-        "supabase_connected": supabase is not None
+        "groq_api_key_set": bool(os.environ.get("GROQ_API_KEY"))
     })
 
 # -------------------------------------------------
-# UPLOAD + ANALYZE (PROTECTED)
+# UPLOAD + ANALYZE
 # -------------------------------------------------
 @app.route("/upload", methods=["POST"])
 @token_required
-def upload(email, user_id):
+def upload():
     try:
-        print(f"📸 Upload request from: {email} (ID: {user_id})")
+        print("📸 Upload request received")
 
         image = request.files.get("image")
         image_url = request.form.get("imageURL")
         age = request.form.get("age")
         gender = request.form.get("gender")
+        unique_id = uuid.uuid4().hex
 
         if not image and not image_url:
             print("❌ No image provided")
@@ -240,16 +344,18 @@ def upload(email, user_id):
 
         # Save image locally for processing
         if image:
-            image_path = os.path.join(UPLOAD_FOLDER, f"{user_id}_{image.filename}")
+            image_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}_{image.filename}")
             image.save(image_path)
             print(f"💾 Image saved: {image_path}")
+            stored_image_url = f"/uploads/{os.path.basename(image_path)}"
         else:
             print(f"🌐 Fetching image from URL: {image_url}")
             resp = requests.get(image_url, timeout=10)
             img = Image.open(BytesIO(resp.content))
-            image_path = os.path.join(UPLOAD_FOLDER, f"{user_id}_remote.jpg")
+            image_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}_remote.jpg")
             img.save(image_path)
             print(f"💾 Remote image saved: {image_path}")
+            stored_image_url = f"/uploads/{os.path.basename(image_path)}"
 
         # Load model only when needed (saves memory)
         print("🔄 Loading YOLO model...")
@@ -257,38 +363,83 @@ def upload(email, user_id):
 
         # Run YOLO detection
         print("🔍 Running YOLO detection...")
-        results = current_model(image_path, conf=0.05)
-        predicted = set()
-        results_payload = []
+        results = current_model(image_path, conf=0.01, imgsz=640)
+        print("RAW YOLO RESULTS:", results)
+        
+        # Dictionary to track highest confidence for each class name
+        detection_dict = {}
+        raw_detections = []
 
         for r in results:
-            if r.boxes is None or r.boxes.cls is None:
+            num_boxes = 0 if r.boxes is None else r.boxes.data.shape[0]
+            print(f"RESULT ITEM: boxes={num_boxes}, cls={r.boxes.cls if r.boxes is not None else None}, conf={r.boxes.conf if r.boxes is not None else None}")
+            if num_boxes == 0:
                 print("⚠️ No detections found in this result")
                 continue
- 
+
             classes = r.boxes.cls.cpu().numpy().astype(int)
             confidences = r.boxes.conf.cpu().numpy()
-            CONF_THRESHOLD = 0.05
+            CONF_THRESHOLD = 0.01
 
             for cls, conf in zip(classes, confidences):
+                print(f"  Detected raw class={cls}, conf={conf:.4f}")
+                raw_detections.append((cls, float(conf)))
                 if conf < CONF_THRESHOLD:
+                    print(f"  Skipping low-confidence detection: class={cls}, conf={conf:.4f}")
                     continue
-                class_name = str(current_model.names[int(cls)] or "").strip()
-                if (
+                raw_label = current_model.names.get(int(cls), None)
+                class_name = str(raw_label or "").strip()
+                print(f"    raw_label from model.names[{int(cls)}] = {repr(raw_label)}")
+                invalid_label = (
                     not class_name
                     or class_name.lower() == "nan"
                     or class_name == "None"
                     or class_name.isnumeric()
-                ):
-                    class_name = "Unknown Skin Condition"
-                predicted.add(class_name)
+                )
+                if invalid_label:
+                    class_name = class_names.get(int(cls), "Unknown Skin Condition")
+                    print(f"    invalid label - falling back to class_names[{int(cls)}] = {repr(class_name)}")
+                else:
+                    mapped_label = class_names.get(int(cls))
+                    if mapped_label:
+                        print(f"    mapping class id {int(cls)} to class_names[{int(cls)}] = {repr(mapped_label)}")
+                        class_name = mapped_label
 
-                results_payload.append({
-                    "problem": class_name,
-                    "confidence": float(conf)
-                })
-                print("RAW CLASS ID:", cls)
-                print(f"  ✓ Detected: {class_name} ({conf:.2f})")
+                # Normalize labels and keep only the highest confidence for each class name
+                normalized_label = normalize_label(class_name)
+                if normalized_label not in detection_dict or conf > detection_dict[normalized_label]:
+                    detection_dict[normalized_label] = float(conf)
+                    print(f"  ✓ Detected: {normalized_label} ({conf:.2f})")
+
+        if 'Acne' not in detection_dict:
+            acne_confidences = [conf for label, conf in detection_dict.items() if label in ACNE_RELATED_CLASSES]
+            if acne_confidences:
+                max_acne_confidence = max(acne_confidences)
+                detection_dict['Acne'] = max_acne_confidence
+                print(f"  Derived Acne from acne-related findings with confidence={max_acne_confidence:.2f}")
+
+        # Convert detection_dict to sorted results_payload (highest confidence first)
+        results_payload = [
+            {"problem": class_name, "confidence": conf}
+            for class_name, conf in sorted(detection_dict.items(), key=lambda x: x[1], reverse=True)
+        ]
+        predicted = set(detection_dict.keys())
+
+        print("Detected classes:")
+        for cls, conf in raw_detections:
+            print(f"  class={cls} confidence={conf:.4f}")
+
+        print("Final normalized issues:")
+        for item in results_payload:
+            print(f"  {item['problem']} {item['confidence']:.4f}")
+
+        print("Final displayed severity levels:")
+        for item in results_payload:
+            severity = get_severity_label(item['confidence'])
+            print(f"  {item['problem']} → {severity}")
+
+        print("RESULTS_PAYLOAD:", results_payload)
+        print("PREDICTED_PROBLEMS:", list(predicted))
 
 
         # Generate AI recommendations
@@ -301,31 +452,53 @@ def upload(email, user_id):
         print("🤖 Generating recommendations with Groq...")
         recommendations = send_to_groq(prompt)
 
-        # Store analysis in Supabase (optional)
-        if supabase:
+        # Save analysis to Supabase if available
+        if supabase and request.user_id and request.user_email:
             try:
-                analysis_data = {
-                    "user_id": user_id,
-                    "email": email,
-                    "age": age,
-                    "gender": gender,
-                    "detected_issues": list(predicted),
+                print("💾 Saving analysis to Supabase...")
+
+                # Upload image to Supabase Storage (analysis-images) and get public URL
+                public_image_url = None
+                try:
+                    # Ensure bucket exists (no-op if already present)
+                    try:
+                        supabase.storage.create_bucket('analysis-images')
+                        print("✅ Created storage bucket 'analysis-images'")
+                    except Exception:
+                        pass
+
+                    bucket = supabase.storage.from_('analysis-images')
+                    dest_path = f"{request.user_id}/{unique_id}_{os.path.basename(image_path)}"
+                    with open(image_path, 'rb') as f:
+                        upload_res = bucket.upload(dest_path, f)
+                    public_image_url = bucket.get_public_url(dest_path)
+                    print(f"✅ Uploaded image to storage: {public_image_url}")
+                except Exception as e:
+                    print(f"⚠️ Supabase storage upload failed: {e}")
+                    # fallback to local served path
+                    public_image_url = request.url_root.rstrip('/') + stored_image_url if stored_image_url else None
+
+                data_to_insert = {
+                    "user_id": request.user_id,
+                    "email": request.user_email,
+                    "age": int(age) if age else None,
+                    "gender": gender or "Not specified",
+                    "detected_issues": [f"{issue}|{confidence}" for issue, confidence in detection_dict.items()],
                     "recommendations": recommendations,
+                    "image_url": public_image_url,
                     "created_at": datetime.utcnow().isoformat()
                 }
-                
-                supabase.table("skin_analyses").insert(analysis_data).execute()
-                print("💾 Analysis saved to Supabase")
+
+                result = supabase.table("skin_analyses").insert(data_to_insert).execute()
+                print("✅ Analysis saved successfully")
             except Exception as e:
-                print(f"⚠️ Failed to save to Supabase: {e}")
+                print(f"❌ Supabase insert failed: {e}")
 
         print("✅ Analysis complete!")
         return jsonify({
             "results": results_payload,
             "predicted_problems": list(predicted),
-            "recommendations": recommendations,
-            "user_email": email,
-            "user_id": user_id
+            "recommendations": recommendations
         })
 
     except Exception as e:
@@ -335,28 +508,42 @@ def upload(email, user_id):
         return jsonify({"error": f"AI processing failed: {str(e)}"}), 500
 
 # -------------------------------------------------
-# GET USER'S ANALYSIS HISTORY (PROTECTED)
+# HISTORY ENDPOINT
 # -------------------------------------------------
 @app.route("/api/history", methods=["GET"])
 @token_required
-def get_history(email, user_id):
+def get_history():
+    """Retrieve user's analysis history from Supabase"""
     try:
         if not supabase:
-            return jsonify({"error": "Database not connected"}), 500
+            return jsonify({"error": "Supabase not available"}), 503
         
-        response = supabase.table("skin_analyses")\
-            .select("*")\
-            .eq("user_id", user_id)\
-            .order("created_at", desc=True)\
-            .limit(10)\
+        # Get current user's history, ordered by creation date (newest first)
+        result = supabase.table("skin_analyses") \
+            .select("*") \
+            .eq("user_id", request.user_id) \
+            .order("created_at", desc=True) \
+            .limit(50) \
             .execute()
         
-        return jsonify({
-            "history": response.data
-        })
+        history = result.data or []
+        for item in history:
+            image_url = item.get("image_url")
+            if image_url and isinstance(image_url, str) and image_url.startswith("/uploads/"):
+                item["image_url"] = request.url_root.rstrip("/") + image_url
+            if item.get("detected_issues") and isinstance(item["detected_issues"], list):
+                item["detected_issues"] = [str(x) for x in item["detected_issues"]]
+
+        return jsonify(history), 200
     except Exception as e:
         print(f"❌ HISTORY ERROR: {e}")
-        return jsonify({"error": "Failed to fetch history"}), 500
+        return jsonify({"error": f"Failed to retrieve history: {str(e)}"}), 500
+
+
+@app.route("/uploads/<path:filename>")
+def serve_upload(filename):
+    """Serve locally saved uploaded images for history thumbnails."""
+    return send_from_directory(UPLOAD_FOLDER, filename)
 
 # -------------------------------------------------
 # DEBUG ENDPOINT
@@ -364,12 +551,10 @@ def get_history(email, user_id):
 @app.route("/api/debug", methods=["GET"])
 def debug():
     return jsonify({
-        "supabase_url": SUPABASE_URL[:20] + "..." if SUPABASE_URL else "NOT SET",
-        "supabase_key_set": bool(SUPABASE_KEY),
-        "supabase_jwt_secret_set": bool(SUPABASE_JWT_SECRET),
+        "status": "debug",
         "groq_api_key_set": bool(os.environ.get("GROQ_API_KEY")),
         "model_exists": os.path.exists(MODEL_PATH),
-        "supabase_connected": supabase is not None
+        "upload_folder_exists": os.path.isdir(UPLOAD_FOLDER)
     })
 
 # -------------------------------------------------
