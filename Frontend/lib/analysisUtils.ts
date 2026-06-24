@@ -42,35 +42,6 @@ export function normalizeLabel(label: string): string {
   return labelMap[cleaned] || cleaned.replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
-export function getSeverityLabel(confidence?: number): string {
-  if (confidence === undefined || confidence === null) {
-    return 'Low';
-  }
-
-  if (confidence >= 0.6) {
-    return 'High';
-  }
-  if (confidence >= 0.35) {
-    return 'Moderate';
-  }
-  if (confidence >= 0.15) {
-    return 'Mild';
-  }
-  return 'Low';
-}
-
-export function getSeverityColorClass(severity: string): string {
-  switch (severity) {
-    case 'High':
-      return 'bg-red-100 text-red-700';
-    case 'Moderate':
-      return 'bg-orange-100 text-orange-700';
-    case 'Mild':
-      return 'bg-yellow-100 text-yellow-800';
-    default:
-      return 'bg-slate-100 text-slate-700';
-  }
-}
 
 export function parseDetectedIssue(value: string): DetectedIssue {
   const raw = value.trim();

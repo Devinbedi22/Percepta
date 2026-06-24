@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import { SectionHeading } from '@/components/SectionHeading';
 import { Camera, Trash2 } from 'lucide-react';
-import { getSeverityColorClass, getSeverityLabel, parseMarkdownSections, deduplicateIssues, parseDetectedIssue } from '@/lib/analysisUtils';
+import { parseMarkdownSections, deduplicateIssues, parseDetectedIssue } from '@/lib/analysisUtils';
 import ReactMarkdown from 'react-markdown';
 
 interface AnalysisResult {
@@ -482,19 +482,11 @@ export function SkinAnalysis() {
             {results.length > 0 ? (
               <div className="mt-6 space-y-4">
                 {results.map((item) => {
-                  const severity = getSeverityLabel(item.confidence);
-                  const badgeClass = getSeverityColorClass(severity);
                   return (
-                    <div key={`${item.problem}-${item.confidence}`} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                    <div key={item.problem} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                       <div className="flex items-center justify-between gap-4">
                         <p className="font-semibold text-slate-950">{item.problem}</p>
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${badgeClass}`}>
-                          {severity}
-                        </span>
                       </div>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">
-                        Severity derived from the model confidence score.
-                      </p>
                     </div>
                   );
                 })}
@@ -553,11 +545,7 @@ export function SkinAnalysis() {
                           </p>
                           <div className="mt-3 space-y-1 text-sm text-slate-600">
                             <p>Detected Issues: <span className="font-semibold text-slate-950">{issues.length}</span></p>
-                            {topIssue?.confidence !== undefined ? (
-                              <p>
-                                Severity: <span className="font-semibold text-slate-950">{getSeverityLabel(topIssue.confidence)}</span>
-                              </p>
-                            ) : null}
+                            {/* Severity display removed per UI requirements */}
                           </div>
                         </div>
                         <button

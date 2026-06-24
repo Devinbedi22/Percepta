@@ -5,7 +5,7 @@ import { Footer } from '@/components/Footer';
 import { Navbar } from '@/components/Navbar';
 import { SectionHeading } from '@/components/SectionHeading';
 import { useAuth } from '@/lib/AuthContext';
-import { getSeverityColorClass, getSeverityLabel, parseDetectedIssue, parseMarkdownSections, deduplicateIssues } from '@/lib/analysisUtils';
+import { parseDetectedIssue, parseMarkdownSections, deduplicateIssues } from '@/lib/analysisUtils';
 import ReactMarkdown from 'react-markdown';
 import { ArrowLeft, X } from 'lucide-react';
 
@@ -119,9 +119,9 @@ export default function HistoryPage() {
           />
 
           <div className="mt-12 space-y-6">
-            <div className="rounded-[2rem] border border-slate-200/80 bg-slate-50 p-10 shadow-soft">
+              <div className="rounded-[2rem] border border-slate-200/80 bg-slate-50 p-10 shadow-soft">
               <p className="text-lg leading-8 text-slate-700">
-                Your analysis history is stored securely with Supabase and scoped to your logged-in account. Click a card to review the full image, recommendations, and issue severity labels.
+                Your analysis history is stored securely with Supabase and scoped to your logged-in account. Click a card to review the full image, recommendations, and detected issues.
               </p>
             </div>
 
@@ -162,11 +162,7 @@ export default function HistoryPage() {
                         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-500">{formatDate(item.created_at)}</p>
                         <p className="mt-2 text-lg font-semibold text-slate-950">Top Issue: {issues.length > 0 ? issues[0].name : '—'}</p>
                         <p className="mt-2 text-sm text-slate-600">Detected Issues: <span className="font-semibold text-slate-950">{issues.length}</span></p>
-                        {issues.length > 0 && issues[0].confidence !== undefined ? (
-                          <p className="text-sm text-slate-600">
-                            Severity: <span className="font-semibold text-slate-950">{getSeverityLabel(issues[0].confidence)}</span>
-                          </p>
-                        ) : null}
+                        {/* Severity display removed per UI requirements */}
                       </div>
                       <div className="flex items-center justify-end">
                         <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">View Details</span>
@@ -242,14 +238,10 @@ export default function HistoryPage() {
                   <h3 className="text-xl font-semibold text-slate-950">Detected issues</h3>
                   <div className="mt-4 space-y-3">
                     {deduplicateIssues(selectedAnalysis.detected_issues.map(parseDetectedIssue)).map((issue) => {
-                      const severity = getSeverityLabel(issue.confidence);
                       return (
                         <div key={issue.name} className="rounded-3xl border border-slate-200 bg-white p-4">
                           <div className="flex items-center justify-between gap-3">
                             <p className="font-semibold text-slate-950">{issue.name}</p>
-                            <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${getSeverityColorClass(severity)}`}>
-                              {severity}
-                            </span>
                           </div>
                         </div>
                       );
