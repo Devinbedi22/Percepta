@@ -63,7 +63,7 @@ function deduplicateResults(results: AnalysisResult[]): AnalysisResult[] {
     const problem = normalizeLabel(result.problem);
     const existing = bestResults.get(problem);
 
-    if (!existing || result.confidence > existing.confidence) {
+    if (!existing || (result.confidence ?? 0) > (existing.confidence ?? 0)) {
       bestResults.set(problem, { ...result, problem });
     }
   }
@@ -311,7 +311,7 @@ export function SkinAnalysis() {
       
       // Prefer LLM-verified concerns when available; fallback to raw YOLO results
       if (Array.isArray(data.verified_results) && data.verified_results.length > 0) {
-        const normalizedVerified = data.verified_results.map((r: any) => ({
+        const normalizedVerified: AnalysisResult[] = data.verified_results.map((r: any) => ({
           problem: normalizeLabel(String(r.problem)),
           confidence: r.confidence ?? undefined,
         } as AnalysisResult));
