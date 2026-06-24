@@ -5,6 +5,9 @@ import requests
 from PIL import Image
 from io import BytesIO
 from groq import Groq
+import google.genai as genai
+import base64
+import json
 import os
 from dotenv import load_dotenv
 import uuid
@@ -311,6 +314,135 @@ def send_to_groq(prompt):
         print("❌ GROQ ERROR:", e)
         return "Unable to generate recommendations at this time."
 
+
+def call_verification_llm(image_path: str, yolo_results: list, age: str, gender: str):
+    """Send actual image bytes + YOLO results to Gemini Vision for verification.
+    Expects Gemini to return JSON with keys: verified_concerns, analysis, recommendations, preventive_measures, lifestyle_tips.
+    Returns parsed JSON or None on failure.
+    """
+    # Prefer GEMINI_API if present for compatibility with .env naming
+    gemini_api_key = os.environ.get("GEMINI_API") or os.environ.get("GEMINI_API_KEY")
+    if not gemini_api_key:
+        print("⚠️ GEMINI_API_KEY or GEMINI_API is not configured.")
+        return None
+
+    gemini_model = "gemini-2.5-flash"
+
+    try:
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+    except Exception as e:
+        print("❌ Failed to read image for Gemini verification:", e)
+        return None
+
+    mime_type = "image/jpeg"
+    try:
+        with Image.open(image_path) as img:
+            if img.format == "PNG":
+                mime_type = "image/png"
+            elif img.format in {"JPEG", "JPG"}:
+                mime_type = "image/jpeg"
+            elif img.format == "WEBP":
+                mime_type = "image/webp"
+            elif img.format == "BMP":
+                mime_type = "image/bmp"
+            elif img.format == "GIF":
+                mime_type = "image/gif"
+    except Exception as e:
+        print("⚠️ Could not determine MIME type from image; defaulting to image/jpeg:", e)
+
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    system_prompt = (
+        "You are an AI skincare analysis assistant.\n\n"
+        "You will receive an attached image and YOLO detections.\n"
+        "The image is the primary source of truth.\n"
+        "Do not use any image URLs in your reasoning.\n"
+        "Do not claim medical diagnoses.\n"
+        "Return only valid JSON in the schema below.\n\n"
+        "Return JSON in the following format exactly (no additional text):\n"
+        "{\n"
+        "  \"verified_concerns\": [],\n"
+        "  \"analysis\": \"\",\n"
+        "  \"recommendations\": [],\n"
+        "  \"preventive_measures\": [],\n"
+        "  \"lifestyle_tips\": []\n"
+        "}\n"
+    )
+
+    user_prompt = (
+        f"YOLO detections: {json.dumps(yolo_results)}\n"
+        f"Age: {age}, Gender: {gender}\n"
+        "Inspect the attached image and the YOLO detections. Return the JSON described above."
+    )
+
+    request_body = {
+        "model": gemini_model,
+        "system_instruction": system_prompt,
+        "input": [
+            {
+                "type": "text",
+                "text": user_prompt,
+            },
+            {
+                "type": "image",
+                "data": image_base64,
+                "mime_type": mime_type,
+            },
+        ],
+        "generation_config": {
+            "temperature": 0.0,
+            "max_output_tokens": 1500,
+        },
+    }
+
+    print("🔎 Gemini Vision verification model:", gemini_model)
+    print("🔎 Gemini request body:", json.dumps({
+        "model": request_body["model"],
+        "system_instruction": "<SYSTEM_PROMPT>",
+        "input": [
+            {"type": "text", "text": "<USER_PROMPT>"},
+            {"type": "image", "data": "<BASE64_IMAGE_BYTES>", "mime_type": mime_type},
+        ],
+        "generation_config": request_body["generation_config"],
+    }, indent=2))
+
+    try:
+        client = genai.Client(api_key=gemini_api_key)
+        response = client.interactions.create(**request_body, timeout=30)
+
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            print("🔎 Gemini output_text:", output_text[:2000] + ("... [truncated]" if len(output_text) > 2000 else ""))
+            try:
+                return json.loads(output_text)
+            except Exception:
+                try:
+                    start = output_text.find("{")
+                    end = output_text.rfind("}")
+                    if start != -1 and end != -1:
+                        return json.loads(output_text[start:end+1])
+                except Exception:
+                    pass
+
+        if hasattr(response, "steps") and response.steps:
+            for step in response.steps:
+                if getattr(step, "type", None) == "model_output":
+                    step_content = getattr(step, "content", None)
+                    if isinstance(step_content, list):
+                        for content_item in step_content:
+                            text = getattr(content_item, "text", None) if hasattr(content_item, "text") else None
+                            if text:
+                                try:
+                                    return json.loads(text)
+                                except Exception:
+                                    continue
+
+        return None
+    except Exception as e:
+        print("❌ Gemini verification error:", e)
+        return None
+
 # -------------------------------------------------
 # HEALTH CHECK
 # -------------------------------------------------
@@ -320,7 +452,8 @@ def health():
         "status": "ok",
         "message": "Percepta-AI Backend Running",
         "model_loaded": os.path.exists(MODEL_PATH),
-        "groq_api_key_set": bool(os.environ.get("GROQ_API_KEY"))
+        "groq_api_key_set": bool(os.environ.get("GROQ_API_KEY")),
+        "gemini_api_key_set": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API"))
     })
 
 # -------------------------------------------------
@@ -442,15 +575,45 @@ def upload():
         print("PREDICTED_PROBLEMS:", list(predicted))
 
 
-        # Generate AI recommendations
-        prompt = (
-            f"Detected skin issues: {list(predicted)}. "
-            f"Age: {age}, Gender: {gender}. "
-            "Give personalized skincare advice with product recommendations."
-        )
-        
-        print("🤖 Generating recommendations with Groq...")
-        recommendations = send_to_groq(prompt)
+        # Call verification LLM with actual uploaded image bytes + YOLO results (post-processing layer)
+        verification_input = results_payload  # list of {problem, confidence}
+
+        print("🤖 Sending image bytes + YOLO results to Gemini Vision for verification...")
+        llm_response = None
+        try:
+            llm_response = call_verification_llm(image_path, verification_input, age or "", gender or "")
+            print("Gemini verification response:", llm_response)
+        except Exception as e:
+            print("❌ Gemini verification call failed:", e)
+
+        # If LLM returned structured JSON, use its verified concerns and recommendations.
+        if llm_response and isinstance(llm_response, dict) and llm_response.get('verified_concerns'):
+            verified_concerns = llm_response.get('verified_concerns', [])
+            # Build verified results payload (no confidence from LLM)
+            verified_results_payload = [
+                {"problem": normalize_label(str(p)), "confidence": None}
+                for p in verified_concerns
+            ]
+            # Use LLM-provided recommendations/analysis for frontend display
+            rec_list = llm_response.get('recommendations', [])
+            # Join recommendations into markdown text if it's a list
+            if isinstance(rec_list, list):
+                recommendations = "\n\n".join(f"- {r}" for r in rec_list)
+            else:
+                recommendations = llm_response.get('recommendations') or llm_response.get('analysis') or "No recommendations returned."
+            llm_analysis_text = llm_response.get('analysis', '')
+        else:
+            # Fallback: if LLM fails, keep using original YOLO-based recommendations
+            print("⚠️ Verification LLM did not return valid JSON; falling back to YOLO-only recommendations")
+            prompt = (
+                f"Detected skin issues: {list(predicted)}. "
+                f"Age: {age}, Gender: {gender}. "
+                "Give personalized skincare advice with product recommendations."
+            )
+            print("🤖 Generating recommendations with Groq (fallback)...")
+            recommendations = send_to_groq(prompt)
+            verified_results_payload = results_payload
+            llm_analysis_text = ""
 
         # Save analysis to Supabase if available
         if supabase and request.user_id and request.user_email:
@@ -483,8 +646,11 @@ def upload():
                     "email": request.user_email,
                     "age": int(age) if age else None,
                     "gender": gender or "Not specified",
+                    # Keep original YOLO detections for debugging and research
                     "detected_issues": [f"{issue}|{confidence}" for issue, confidence in detection_dict.items()],
+                    # Store LLM-provided recommendations (may be markdown or text)
                     "recommendations": recommendations,
+                    # Do not overwrite detected_issues with verified concerns; keep YOLO outputs
                     "image_url": public_image_url,
                     "created_at": datetime.utcnow().isoformat()
                 }
@@ -496,9 +662,11 @@ def upload():
 
         print("✅ Analysis complete!")
         return jsonify({
-            "results": results_payload,
+            "results": results_payload,               # raw YOLO results (for debugging)
+            "verified_results": verified_results_payload,  # LLM-verified concerns (preferred by frontend)
             "predicted_problems": list(predicted),
-            "recommendations": recommendations
+            "recommendations": recommendations,
+            "llm_analysis": llm_analysis_text
         })
 
     except Exception as e:
@@ -553,6 +721,7 @@ def debug():
     return jsonify({
         "status": "debug",
         "groq_api_key_set": bool(os.environ.get("GROQ_API_KEY")),
+        "gemini_api_key_set": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API")),
         "model_exists": os.path.exists(MODEL_PATH),
         "upload_folder_exists": os.path.isdir(UPLOAD_FOLDER)
     })

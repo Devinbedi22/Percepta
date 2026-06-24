@@ -12,7 +12,7 @@ import ReactMarkdown from 'react-markdown';
 
 interface AnalysisResult {
   problem: string;
-  confidence: number;
+  confidence?: number;
 }
 
 interface HistoryItem {
@@ -68,7 +68,7 @@ function deduplicateResults(results: AnalysisResult[]): AnalysisResult[] {
     }
   }
 
-  return Array.from(bestResults.values()).sort((a, b) => b.confidence - a.confidence);
+  return Array.from(bestResults.values()).sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
 }
 
 export function SkinAnalysis() {
@@ -309,21 +309,34 @@ export function SkinAnalysis() {
 
       const data = await response.json();
       
-      const normalizedInputResults = (Array.isArray(data.results) ? data.results : []).map(
-        (r: AnalysisResult) => ({
-          ...r,
-          problem: normalizeLabel(r.problem),
-        })
-      );
-      const dedupedResults = deduplicateResults(normalizedInputResults);
-      setResults(dedupedResults);
+      // Prefer LLM-verified concerns when available; fallback to raw YOLO results
+      if (Array.isArray(data.verified_results) && data.verified_results.length > 0) {
+        const normalizedVerified = data.verified_results.map((r: any) => ({
+          problem: normalizeLabel(String(r.problem)),
+          confidence: r.confidence ?? undefined,
+        } as AnalysisResult));
+        setResults(deduplicateResults(normalizedVerified));
+        setPredictedProblems(
+          Array.from(new Set(normalizedVerified.map((r) => normalizeLabel(r.problem)))) as string[]
+        );
+      } else {
+        const normalizedInputResults = (Array.isArray(data.results) ? data.results : []).map(
+          (r: AnalysisResult) => ({
+            ...r,
+            problem: normalizeLabel(r.problem),
+          })
+        );
+        const dedupedResults = deduplicateResults(normalizedInputResults);
+        setResults(dedupedResults);
 
-      const normalizedProblems = Array.from(
-        new Set(
-          (Array.isArray(data.predicted_problems) ? data.predicted_problems : []).map((p: string) => normalizeLabel(String(p)))
-        )
-      );
-      setPredictedProblems(normalizedProblems as string[]);
+        const normalizedProblems = Array.from(
+          new Set(
+            (Array.isArray(data.predicted_problems) ? data.predicted_problems : []).map((p: string) => normalizeLabel(String(p)))
+          )
+        );
+        setPredictedProblems(normalizedProblems as string[]);
+      }
+
       setRecommendations(data.recommendations ?? 'No recommendations returned.');
 
       // Refresh history
