@@ -41,6 +41,7 @@ env/
 ENV/
 .venv/
 .ENV/
+venv/.venv/env/ENV/testenv*/
 
 # IDE specific files
 .vscode/
