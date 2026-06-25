@@ -8,7 +8,9 @@ from groq import Groq
 import google.genai as genai
 import base64
 import json
+import re
 import os
+import re
 from dotenv import load_dotenv
 import uuid
 import jwt
@@ -320,7 +322,6 @@ def call_verification_llm(image_path: str, yolo_results: list, age: str, gender:
     Expects Gemini to return JSON with keys: verified_concerns, analysis, recommendations, preventive_measures, lifestyle_tips.
     Returns parsed JSON or None on failure.
     """
-    # Prefer GEMINI_API if present for compatibility with .env naming
     gemini_api_key = os.environ.get("GEMINI_API") or os.environ.get("GEMINI_API_KEY")
     if not gemini_api_key:
         print("⚠️ GEMINI_API_KEY or GEMINI_API is not configured.")
@@ -380,20 +381,10 @@ def call_verification_llm(image_path: str, yolo_results: list, age: str, gender:
         "model": gemini_model,
         "system_instruction": system_prompt,
         "input": [
-            {
-                "type": "text",
-                "text": user_prompt,
-            },
-            {
-                "type": "image",
-                "data": image_base64,
-                "mime_type": mime_type,
-            },
+            {"type": "text", "text": user_prompt},
+            {"type": "image", "data": image_base64, "mime_type": mime_type},
         ],
-        "generation_config": {
-            "temperature": 0.0,
-            "max_output_tokens": 1500,
-        },
+        "generation_config": {"temperature": 0.0, "max_output_tokens": 1500},
     }
 
     print("🔎 Gemini Vision verification model:", gemini_model)
@@ -411,33 +402,66 @@ def call_verification_llm(image_path: str, yolo_results: list, age: str, gender:
         client = genai.Client(api_key=gemini_api_key)
         response = client.interactions.create(**request_body, timeout=30)
 
+        try:
+            raw_response_dump = response.model_dump() if hasattr(response, 'model_dump') else repr(response)
+        except Exception:
+            raw_response_dump = repr(response)
+        print('Gemini Raw Response (SDK object):', raw_response_dump)
+
         output_text = getattr(response, "output_text", None)
         if output_text:
-            print("🔎 Gemini output_text:", output_text[:2000] + ("... [truncated]" if len(output_text) > 2000 else ""))
+            print("🔎 Gemini raw output_text:", output_text[:2000] + ("... [truncated]" if len(output_text) > 2000 else ""))
             try:
-                return json.loads(output_text)
-            except Exception:
-                try:
-                    start = output_text.find("{")
-                    end = output_text.rfind("}")
-                    if start != -1 and end != -1:
-                        return json.loads(output_text[start:end+1])
-                except Exception:
-                    pass
+                text = str(output_text)
+                text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.I)
+                text = re.sub(r"\s*```\s*$", "", text)
+                m = re.search(r"(\{.*\})", text, flags=re.S)
+                if m:
+                    try:
+                        parsed = json.loads(m.group(1))
+                        print("🔎 Parsed Gemini JSON from output_text:", parsed)
+                        return parsed
+                    except Exception as e:
+                        print("❌ Failed to json.loads extracted JSON fragment:", e)
+                parsed = json.loads(text)
+                print("🔎 Parsed Gemini JSON from output_text (direct load):", parsed)
+                return parsed
+            except Exception as e:
+                print("❌ Error while sanitizing Gemini output_text:", e)
 
         if hasattr(response, "steps") and response.steps:
             for step in response.steps:
-                if getattr(step, "type", None) == "model_output":
-                    step_content = getattr(step, "content", None)
-                    if isinstance(step_content, list):
-                        for content_item in step_content:
-                            text = getattr(content_item, "text", None) if hasattr(content_item, "text") else None
+                try:
+                    if getattr(step, "type", None) in {"model_output", "output", "final_output"}:
+                        step_content = getattr(step, "content", None) or getattr(step, "output", None)
+                        items = step_content if isinstance(step_content, list) else [step_content]
+                        for content_item in items:
+                            if not content_item:
+                                continue
+                            text = None
+                            if hasattr(content_item, "text"):
+                                text = getattr(content_item, "text")
+                            elif isinstance(content_item, dict):
+                                text = content_item.get("text") or content_item.get("content")
                             if text:
                                 try:
-                                    return json.loads(text)
+                                    txt = str(text)
+                                    txt = re.sub(r"^\s*```(?:json)?\s*", "", txt, flags=re.I)
+                                    txt = re.sub(r"\s*```\s*$", "", txt)
+                                    m = re.search(r"(\{.*\})", txt, flags=re.S)
+                                    if m:
+                                        parsed = json.loads(m.group(1))
+                                        print("🔎 Parsed Gemini JSON from steps content:", parsed)
+                                        return parsed
+                                    parsed = json.loads(txt)
+                                    print("🔎 Parsed Gemini JSON from steps content (direct load):", parsed)
+                                    return parsed
                                 except Exception:
                                     continue
+                except Exception:
+                    continue
 
+        print('⚠️ Gemini verification returned no parsable JSON output_text or steps content')
         return None
     except Exception as e:
         print("❌ Gemini verification error:", e)
@@ -580,9 +604,10 @@ def upload():
 
         print("🤖 Sending image bytes + YOLO results to Gemini Vision for verification...")
         llm_response = None
+        print("YOLO Results:", results_payload)
         try:
             llm_response = call_verification_llm(image_path, verification_input, age or "", gender or "")
-            print("Gemini verification response:", llm_response)
+            print("Gemini Parsed Response:", llm_response)
         except Exception as e:
             print("❌ Gemini verification call failed:", e)
 
@@ -603,8 +628,8 @@ def upload():
                 recommendations = llm_response.get('recommendations') or llm_response.get('analysis') or "No recommendations returned."
             llm_analysis_text = llm_response.get('analysis', '')
         else:
-            # Fallback: if LLM fails, keep using original YOLO-based recommendations
-            print("⚠️ Verification LLM did not return valid JSON; falling back to YOLO-only recommendations")
+            # Fallback: if LLM fails or returns no verified concerns, keep using original YOLO-based recommendations
+            print("⚠️ Verification LLM did not return valid JSON or verified concerns; falling back to YOLO-only recommendations")
             prompt = (
                 f"Detected skin issues: {list(predicted)}. "
                 f"Age: {age}, Gender: {gender}. "
@@ -660,14 +685,18 @@ def upload():
             except Exception as e:
                 print(f"❌ Supabase insert failed: {e}")
 
-        print("✅ Analysis complete!")
-        return jsonify({
+        print("Verified Results:", verified_results_payload)
+        print("verified_results_payload:", verified_results_payload)
+        response = {
             "results": results_payload,               # raw YOLO results (for debugging)
             "verified_results": verified_results_payload,  # LLM-verified concerns (preferred by frontend)
             "predicted_problems": list(predicted),
             "recommendations": recommendations,
             "llm_analysis": llm_analysis_text
-        })
+        }
+        print(json.dumps(response, indent=2))
+        print("✅ Analysis complete!")
+        return jsonify(response)
 
     except Exception as e:
         print(f"❌ UPLOAD ERROR: {e}")
