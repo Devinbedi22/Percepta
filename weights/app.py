@@ -5,7 +5,14 @@ import requests
 from PIL import Image
 from io import BytesIO
 from groq import Groq
-import google.genai as genai
+try:
+    import google.genai as genai
+except ImportError:
+    genai = None
+try:
+    import google.generativeai as legacy_genai
+except ImportError:
+    legacy_genai = None
 import base64
 import json
 import re
@@ -399,62 +406,89 @@ def call_verification_llm(image_path: str, yolo_results: list, age: str, gender:
     }, indent=2))
 
     try:
-        client = genai.Client(api_key=gemini_api_key)
-        response = client.interactions.create(**request_body, timeout=30)
+        response = None
+        sdk_used = None
 
+        if genai is not None and hasattr(genai.Client, 'interactions'):
+            client = genai.Client(api_key=gemini_api_key)
+            response = client.interactions.create(**request_body, timeout=30)
+            sdk_used = 'google.genai'
+        elif legacy_genai is not None:
+            print('⚠️ google.genai interactions API unavailable, falling back to google.generativeai')
+            legacy_genai.configure(api_key=gemini_api_key)
+            model = legacy_genai.GenerativeModel('gemini-1.5-flash')
+            contents = [
+                system_prompt,
+                user_prompt,
+                legacy_genai.protos.Blob(data=image_bytes, mime_type=mime_type),
+            ]
+            response = model.generate_content(contents)
+            sdk_used = 'google.generativeai'
+        else:
+            raise RuntimeError('No compatible Gemini SDK available. Install google-genai>=2.0.0 or google-generativeai.')
+
+        print(f'🔎 Gemini SDK used: {sdk_used}')
         try:
             raw_response_dump = response.model_dump() if hasattr(response, 'model_dump') else repr(response)
         except Exception:
             raw_response_dump = repr(response)
         print('Gemini Raw Response (SDK object):', raw_response_dump)
 
-        output_text = getattr(response, "output_text", None)
+        output_text = None
+        if sdk_used == 'google.genai':
+            output_text = getattr(response, 'output_text', None)
+        else:
+            output_text = getattr(response, 'text', None)
+            if not output_text and hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                output_text = getattr(candidate, 'content', None) or getattr(candidate, 'text', None)
+
         if output_text:
-            print("🔎 Gemini raw output_text:", output_text[:2000] + ("... [truncated]" if len(output_text) > 2000 else ""))
+            print('🔎 Gemini raw output_text:', output_text[:2000] + ('... [truncated]' if len(output_text) > 2000 else ''))
             try:
                 text = str(output_text)
-                text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.I)
-                text = re.sub(r"\s*```\s*$", "", text)
-                m = re.search(r"(\{.*\})", text, flags=re.S)
+                text = re.sub(r'^\s*```(?:json)?\s*', '', text, flags=re.I)
+                text = re.sub(r'\s*```\s*$', '', text)
+                m = re.search(r'(\{.*\})', text, flags=re.S)
                 if m:
                     try:
                         parsed = json.loads(m.group(1))
-                        print("🔎 Parsed Gemini JSON from output_text:", parsed)
+                        print('🔎 Parsed Gemini JSON from output_text:', parsed)
                         return parsed
                     except Exception as e:
-                        print("❌ Failed to json.loads extracted JSON fragment:", e)
+                        print('❌ Failed to json.loads extracted JSON fragment:', e)
                 parsed = json.loads(text)
-                print("🔎 Parsed Gemini JSON from output_text (direct load):", parsed)
+                print('🔎 Parsed Gemini JSON from output_text (direct load):', parsed)
                 return parsed
             except Exception as e:
-                print("❌ Error while sanitizing Gemini output_text:", e)
+                print('❌ Error while sanitizing Gemini output_text:', e)
 
-        if hasattr(response, "steps") and response.steps:
+        if hasattr(response, 'steps') and response.steps:
             for step in response.steps:
                 try:
-                    if getattr(step, "type", None) in {"model_output", "output", "final_output"}:
-                        step_content = getattr(step, "content", None) or getattr(step, "output", None)
+                    if getattr(step, 'type', None) in {'model_output', 'output', 'final_output'}:
+                        step_content = getattr(step, 'content', None) or getattr(step, 'output', None)
                         items = step_content if isinstance(step_content, list) else [step_content]
                         for content_item in items:
                             if not content_item:
                                 continue
                             text = None
-                            if hasattr(content_item, "text"):
-                                text = getattr(content_item, "text")
+                            if hasattr(content_item, 'text'):
+                                text = getattr(content_item, 'text')
                             elif isinstance(content_item, dict):
-                                text = content_item.get("text") or content_item.get("content")
+                                text = content_item.get('text') or content_item.get('content')
                             if text:
                                 try:
                                     txt = str(text)
-                                    txt = re.sub(r"^\s*```(?:json)?\s*", "", txt, flags=re.I)
-                                    txt = re.sub(r"\s*```\s*$", "", txt)
-                                    m = re.search(r"(\{.*\})", txt, flags=re.S)
+                                    txt = re.sub(r'^\s*```(?:json)?\s*', '', txt, flags=re.I)
+                                    txt = re.sub(r'\s*```\s*$', '', txt)
+                                    m = re.search(r'(\{.*\})', txt, flags=re.S)
                                     if m:
                                         parsed = json.loads(m.group(1))
-                                        print("🔎 Parsed Gemini JSON from steps content:", parsed)
+                                        print('🔎 Parsed Gemini JSON from steps content:', parsed)
                                         return parsed
                                     parsed = json.loads(txt)
-                                    print("🔎 Parsed Gemini JSON from steps content (direct load):", parsed)
+                                    print('🔎 Parsed Gemini JSON from steps content (direct load):', parsed)
                                     return parsed
                                 except Exception:
                                     continue
@@ -464,7 +498,7 @@ def call_verification_llm(image_path: str, yolo_results: list, age: str, gender:
         print('⚠️ Gemini verification returned no parsable JSON output_text or steps content')
         return None
     except Exception as e:
-        print("❌ Gemini verification error:", e)
+        print('❌ Gemini verification error:', e)
         return None
 
 # -------------------------------------------------

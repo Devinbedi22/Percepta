@@ -308,6 +308,7 @@ export function SkinAnalysis() {
       }
 
       const data = await response.json();
+      console.log('Backend Response:', data);
       
       // Prefer LLM-verified concerns when available; fallback to raw YOLO results
       if (Array.isArray(data.verified_results) && data.verified_results.length > 0) {
