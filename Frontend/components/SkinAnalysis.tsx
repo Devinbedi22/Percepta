@@ -83,6 +83,7 @@ export function SkinAnalysis() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<AnalysisResult[]>([]);
   const [predictedProblems, setPredictedProblems] = useState<string[]>([]);
+  const [analysisEmptyMessage, setAnalysisEmptyMessage] = useState('Results from the last analysis will appear here.');
   const [recommendations, setRecommendations] = useState('');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -279,6 +280,7 @@ export function SkinAnalysis() {
     setLoading(true);
     setResults([]);
     setPredictedProblems([]);
+    setAnalysisEmptyMessage('Results from the last analysis will appear here.');
     setRecommendations('');
 
     const formData = new FormData();
@@ -309,16 +311,23 @@ export function SkinAnalysis() {
 
       const data = await response.json();
       console.log('Backend Response:', data);
-      
-      // Prefer LLM-verified concerns when available; fallback to raw YOLO results
-      if (Array.isArray(data.verified_results) && data.verified_results.length > 0) {
-        const normalizedVerified: AnalysisResult[] = data.verified_results.map((r: any) => ({
+
+      const hasVerifiedResultsField = Object.prototype.hasOwnProperty.call(data, 'verified_results');
+
+      if (hasVerifiedResultsField) {
+        const verifiedResults = Array.isArray(data.verified_results) ? data.verified_results : [];
+        const normalizedVerified: AnalysisResult[] = verifiedResults.map((r: any) => ({
           problem: normalizeLabel(String(r.problem)),
           confidence: r.confidence ?? undefined,
         } as AnalysisResult));
-        setResults(deduplicateResults(normalizedVerified));
+        const dedupedVerifiedResults = deduplicateResults(normalizedVerified);
+
+        setResults(dedupedVerifiedResults);
         setPredictedProblems(
           Array.from(new Set(normalizedVerified.map((r) => normalizeLabel(r.problem)))) as string[]
+        );
+        setAnalysisEmptyMessage(
+          dedupedVerifiedResults.length > 0 ? '' : 'No significant skin concerns detected.'
         );
       } else {
         const normalizedInputResults = (Array.isArray(data.results) ? data.results : []).map(
@@ -336,6 +345,7 @@ export function SkinAnalysis() {
           )
         );
         setPredictedProblems(normalizedProblems as string[]);
+        setAnalysisEmptyMessage('');
       }
 
       setRecommendations(data.recommendations ?? 'No recommendations returned.');
@@ -506,7 +516,9 @@ export function SkinAnalysis() {
                 })}
               </div>
             ) : (
-              <p className="mt-6 text-sm leading-7 text-slate-600">Results from the last analysis will appear here.</p>
+              <p className="mt-6 text-sm leading-7 text-slate-600">
+                {analysisEmptyMessage || 'Results from the last analysis will appear here.'}
+              </p>
             )}
           </motion.div>
 
